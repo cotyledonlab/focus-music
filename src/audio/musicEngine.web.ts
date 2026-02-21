@@ -5,7 +5,8 @@ import WebRenderer from "@elemaudio/web-renderer";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
 import { buildSongComposition, describeSongKey, midiToHz } from "./composition";
-import { createSongPreset, type SongDrumKit, type SongPreset, type SongTimbre } from "./song";
+import { getWebDrumKitProfile, getWebTimbreProfile } from "./profiles";
+import { createSongPreset, type SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 
 type ConstRef = {
@@ -20,137 +21,6 @@ type EngineRefs = {
   root: ConstRef;
   warmth: ConstRef;
   energy: ConstRef;
-};
-
-type TimbreProfile = {
-  droneSawMix: number;
-  droneSquareMix: number;
-  droneDrive: number;
-  droneCutoffBase: number;
-  droneCutoffMove: number;
-  stereoWidth: number;
-  airGain: number;
-  shimmerGain: number;
-  riffSawMix: number;
-  riffSquareMix: number;
-  riffDrive: number;
-  riffCutoffBase: number;
-  riffCutoffMove: number;
-};
-
-type DrumKitProfile = {
-  kickDecay: number;
-  kickClick: number;
-  kickSweep: number;
-  kickBase: number;
-  snareBody: number;
-  snareNoise: number;
-  hatMetal: number;
-  hatNoise: number;
-  clapNoise: number;
-  drive: number;
-};
-
-const TIMBRE_PROFILES: Record<SongTimbre, TimbreProfile> = {
-  analog: {
-    droneSawMix: 0.22,
-    droneSquareMix: 0.06,
-    droneDrive: 0.12,
-    droneCutoffBase: 480,
-    droneCutoffMove: 1800,
-    stereoWidth: 0.7,
-    airGain: 1,
-    shimmerGain: 0.9,
-    riffSawMix: 0.74,
-    riffSquareMix: 0.12,
-    riffDrive: 0.2,
-    riffCutoffBase: 750,
-    riffCutoffMove: 2200
-  },
-  glass: {
-    droneSawMix: 0.12,
-    droneSquareMix: 0.16,
-    droneDrive: 0.08,
-    droneCutoffBase: 620,
-    droneCutoffMove: 2600,
-    stereoWidth: 0.85,
-    airGain: 1.15,
-    shimmerGain: 1.22,
-    riffSawMix: 0.44,
-    riffSquareMix: 0.32,
-    riffDrive: 0.12,
-    riffCutoffBase: 1100,
-    riffCutoffMove: 2800
-  },
-  noir: {
-    droneSawMix: 0.18,
-    droneSquareMix: 0.1,
-    droneDrive: 0.18,
-    droneCutoffBase: 360,
-    droneCutoffMove: 1500,
-    stereoWidth: 0.62,
-    airGain: 0.74,
-    shimmerGain: 0.58,
-    riffSawMix: 0.68,
-    riffSquareMix: 0.18,
-    riffDrive: 0.28,
-    riffCutoffBase: 620,
-    riffCutoffMove: 1750
-  },
-  dust: {
-    droneSawMix: 0.26,
-    droneSquareMix: 0.08,
-    droneDrive: 0.24,
-    droneCutoffBase: 420,
-    droneCutoffMove: 1400,
-    stereoWidth: 0.74,
-    airGain: 0.92,
-    shimmerGain: 0.78,
-    riffSawMix: 0.58,
-    riffSquareMix: 0.24,
-    riffDrive: 0.35,
-    riffCutoffBase: 680,
-    riffCutoffMove: 1900
-  }
-};
-
-const DRUM_KITS: Record<SongDrumKit, DrumKitProfile> = {
-  kit808: {
-    kickDecay: 0.22,
-    kickClick: 0.02,
-    kickSweep: 105,
-    kickBase: 34,
-    snareBody: 0.32,
-    snareNoise: 0.8,
-    hatMetal: 0.1,
-    hatNoise: 0.9,
-    clapNoise: 0.7,
-    drive: 0.12
-  },
-  kit909: {
-    kickDecay: 0.16,
-    kickClick: 0.07,
-    kickSweep: 145,
-    kickBase: 40,
-    snareBody: 0.48,
-    snareNoise: 1,
-    hatMetal: 0.24,
-    hatNoise: 1,
-    clapNoise: 0.9,
-    drive: 0.18
-  },
-  linndrum: {
-    kickDecay: 0.12,
-    kickClick: 0.05,
-    kickSweep: 82,
-    kickBase: 46,
-    snareBody: 0.55,
-    snareNoise: 0.72,
-    hatMetal: 0.15,
-    hatNoise: 0.82,
-    clapNoise: 0.85,
-    drive: 0.24
-  }
 };
 
 const createConstRef = (core: WebRenderer, key: string, value: number): ConstRef => {
@@ -383,8 +253,8 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     const cfg = MODE_CONFIGS[this.mode];
     const song = this.song;
-    const timbre = TIMBRE_PROFILES[song.timbre];
-    const drums = DRUM_KITS[song.drumKit];
+    const timbre = getWebTimbreProfile(song.timbre);
+    const drums = getWebDrumKitProfile(song.drumKit);
     const patterns = buildSongComposition(this.mode, song, this.evolveTick, cfg.pulseBpm);
     this.evolveTick += 1;
 

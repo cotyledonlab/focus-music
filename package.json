@@ -8,7 +8,9 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm run test && npx expo export --platform web"
   },
   "dependencies": {
     "@elemaudio/core": "^4.0.1",
@@ -32,6 +34,7 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~18.3.12",
-    "typescript": "~5.3.3"
+    "typescript": "~5.3.3",
+    "vitest": "^4.0.18"
   }
 }

@@ -4,7 +4,8 @@ import * as FileSystem from "expo-file-system";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
 import { buildSongComposition, midiToHz } from "./composition";
-import { createSongPreset, type SongDrumKit, type SongPreset, type SongTimbre } from "./song";
+import { getNativeDrumKitProfile, getNativeTimbreProfile } from "./profiles";
+import { createSongPreset, type SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 import { encodeStereoWavBase64 } from "./wav";
 
@@ -15,82 +16,6 @@ const CROSSFADE_SECONDS = 4;
 type PreparedSound = {
   sound: Audio.Sound;
   uri: string;
-};
-
-type TimbreProfile = {
-  sawMix: number;
-  pulseMix: number;
-  droneDrive: number;
-  riffDrive: number;
-  airGain: number;
-  shimmerGain: number;
-};
-
-type DrumKitProfile = {
-  kickDecay: number;
-  kickClick: number;
-  snareNoise: number;
-  hatNoise: number;
-  drive: number;
-};
-
-const TIMBRE_PROFILES: Record<SongTimbre, TimbreProfile> = {
-  analog: {
-    sawMix: 0.24,
-    pulseMix: 0.08,
-    droneDrive: 0.12,
-    riffDrive: 0.18,
-    airGain: 1,
-    shimmerGain: 0.95
-  },
-  glass: {
-    sawMix: 0.12,
-    pulseMix: 0.18,
-    droneDrive: 0.06,
-    riffDrive: 0.1,
-    airGain: 1.18,
-    shimmerGain: 1.2
-  },
-  noir: {
-    sawMix: 0.22,
-    pulseMix: 0.1,
-    droneDrive: 0.18,
-    riffDrive: 0.28,
-    airGain: 0.7,
-    shimmerGain: 0.62
-  },
-  dust: {
-    sawMix: 0.26,
-    pulseMix: 0.12,
-    droneDrive: 0.23,
-    riffDrive: 0.32,
-    airGain: 0.9,
-    shimmerGain: 0.76
-  }
-};
-
-const DRUM_KITS: Record<SongDrumKit, DrumKitProfile> = {
-  kit808: {
-    kickDecay: 0.24,
-    kickClick: 0.012,
-    snareNoise: 0.74,
-    hatNoise: 0.82,
-    drive: 0.12
-  },
-  kit909: {
-    kickDecay: 0.17,
-    kickClick: 0.04,
-    snareNoise: 0.92,
-    hatNoise: 1,
-    drive: 0.17
-  },
-  linndrum: {
-    kickDecay: 0.13,
-    kickClick: 0.032,
-    snareNoise: 0.64,
-    hatNoise: 0.78,
-    drive: 0.23
-  }
 };
 
 const TWO_PI = Math.PI * 2;
@@ -267,8 +192,8 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const segmentSeed = song.seed + this.seedCounter * 9973;
     this.seedCounter += 1;
 
-    const timbre = TIMBRE_PROFILES[song.timbre];
-    const drums = DRUM_KITS[song.drumKit];
+    const timbre = getNativeTimbreProfile(song.timbre);
+    const drums = getNativeDrumKitProfile(song.drumKit);
     const composition = buildSongComposition(this.mode, song, this.seedCounter, cfg.pulseBpm);
 
     const totalSamples = Math.floor(SAMPLE_RATE * SEGMENT_SECONDS);

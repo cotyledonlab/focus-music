@@ -54,7 +54,7 @@ type IntRange = {
   max: number;
 };
 
-type SongBounds = {
+export type SongBounds = {
   rootMidi: IntRange;
   tempoScale: Range;
   drumDensity: Range;
@@ -71,7 +71,7 @@ type SongBounds = {
   hookStyles: SongHookStyle[];
 };
 
-const MODE_BOUNDS: Record<FocusMode, SongBounds> = {
+export const MODE_BOUNDS: Record<FocusMode, SongBounds> = {
   focus: {
     rootMidi: { min: 45, max: 57 },
     tempoScale: { min: 1.0, max: 1.14 },
@@ -141,7 +141,10 @@ const clampRound = (value: number) => Math.round(value * 1000) / 1000;
 
 const inRange = (rng: Mulberry32, range: Range) => clampRound(rng.range(range.min, range.max));
 
-const inIntRange = (rng: Mulberry32, range: IntRange) => Math.round(rng.range(range.min, range.max + 1));
+const inIntRange = (rng: Mulberry32, range: IntRange) => {
+  const value = Math.floor(rng.range(range.min, range.max + 1));
+  return Math.max(range.min, Math.min(range.max, value));
+};
 
 const pickOne = <T>(rng: Mulberry32, values: readonly T[]): T => {
   return values[Math.floor(rng.range(0, values.length))] ?? values[0];
@@ -171,6 +174,8 @@ const deriveIdentity = (mode: FocusMode, seed: number) => {
     hookStyle: pickOne(rng, bounds.hookStyles)
   };
 };
+
+export const getSongBounds = (mode: FocusMode): SongBounds => MODE_BOUNDS[mode];
 
 export const createSongPreset = (mode: FocusMode, seed = Date.now(), favorite = false): SongPreset => {
   const rng = new Mulberry32(seed);
@@ -212,7 +217,8 @@ export const sanitizeSongPreset = (input: Partial<SongPreset>): SongPreset | nul
     typeof input.id !== "string" ||
     (input.mode !== "focus" && input.mode !== "relax" && input.mode !== "sleep") ||
     typeof input.name !== "string" ||
-    typeof input.seed !== "number"
+    typeof input.seed !== "number" ||
+    !Number.isFinite(input.seed)
   ) {
     return null;
   }
@@ -221,8 +227,14 @@ export const sanitizeSongPreset = (input: Partial<SongPreset>): SongPreset | nul
   const bounds = MODE_BOUNDS[mode];
   const identity = deriveIdentity(mode, input.seed);
 
-  const clamp = (v: number, range: Range) => clampRound(Math.max(range.min, Math.min(range.max, v)));
-  const clampInt = (v: number, range: IntRange) => Math.round(Math.max(range.min, Math.min(range.max, v)));
+  const clamp = (v: number, range: Range) => {
+    const value = Number.isFinite(v) ? v : range.min;
+    return clampRound(Math.max(range.min, Math.min(range.max, value)));
+  };
+  const clampInt = (v: number, range: IntRange) => {
+    const value = Number.isFinite(v) ? v : range.min;
+    return Math.round(Math.max(range.min, Math.min(range.max, value)));
+  };
 
   const inValues = <T>(value: unknown, values: readonly T[], fallback: T): T => {
     return values.includes(value as T) ? (value as T) : fallback;

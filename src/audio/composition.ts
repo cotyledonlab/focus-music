@@ -64,7 +64,7 @@ const withAnchors = (seq: number[], anchors: number[]) => {
 
 const midiToHz = (midi: number) => 440 * Math.pow(2, (midi - 69) / 12);
 
-const SCALE_INTERVALS: Record<SongScaleFamily, number[]> = {
+export const SCALE_INTERVALS: Record<SongScaleFamily, number[]> = {
   minor: [0, 2, 3, 5, 7, 8, 10],
   dorian: [0, 2, 3, 5, 7, 9, 10],
   phrygian: [0, 1, 3, 5, 7, 8, 10],
@@ -74,7 +74,7 @@ const SCALE_INTERVALS: Record<SongScaleFamily, number[]> = {
   majorPentatonic: [0, 2, 4, 7, 9]
 };
 
-const PROGRESSION_LIBRARY = {
+export const PROGRESSION_LIBRARY = {
   driver: [0, 5, 3, 6],
   lift: [0, 2, 5, 4],
   descent: [5, 4, 3, 0],
@@ -85,30 +85,41 @@ const PROGRESSION_LIBRARY = {
   drone: [0, 0, 5, 0]
 } as const;
 
-const HOOK_LIBRARY: Record<SongHookStyle, Array<number | null>> = {
+export const HOOK_LIBRARY: Record<SongHookStyle, Array<number | null>> = {
   arpeggio: [0, 2, 4, 2, 0, 2, 5, 2, 0, 2, 4, 2, 0, 2, 6, 4],
   stabs: [0, null, 4, null, 2, null, 5, null, 0, null, 4, null, 2, null, 6, null],
   motif: [0, 1, 2, 4, 5, 4, 2, 1, 0, 1, 2, 4, 5, 2, 1, 0],
   glide: [0, 2, 3, 5, 4, 3, 2, 1, 0, 2, 4, 5, 4, 3, 2, 0]
 };
 
-const GROOVE_PULSE: Record<SongGroove, number[]> = {
+export const GROOVE_PULSE: Record<SongGroove, number[]> = {
   straight: [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0],
   shuffle: [1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 1],
   broken: [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1]
 };
 
-const DRUM_BPM_BY_MODE: Record<FocusMode, number> = {
+export const DRUM_BPM_BY_MODE: Record<FocusMode, number> = {
   focus: 122,
   relax: 98,
   sleep: 76
 };
 
-const scaleDegreeToRatio = (scale: number[], degree: number) => {
+export const scaleDegreeToRatio = (scale: number[], degree: number) => {
   const index = mod(degree, scale.length);
   const octave = Math.floor((degree - index) / scale.length);
   const semitone = scale[index] + octave * 12;
   return Math.pow(2, semitone / 12);
+};
+
+export const isRatioInScaleFamily = (ratio: number, family: SongScaleFamily) => {
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    return false;
+  }
+
+  const intervals = SCALE_INTERVALS[family];
+  const semitone = Math.round(Math.log2(ratio) * 12);
+  const normalized = mod(semitone, 12);
+  return intervals.some((degree) => mod(degree, 12) === normalized);
 };
 
 const evolveDegree = (base: number, scaleLength: number, rng: Mulberry32, looseness: number) => {
