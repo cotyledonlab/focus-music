@@ -5,7 +5,7 @@ import WebRenderer from "@elemaudio/web-renderer";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
 import { buildSongComposition, describeSongKey, midiToHz } from "./composition";
-import { getWebDrumKitProfile, getWebTimbreProfile } from "./profiles";
+import { getMixProfile, getWebDrumKitProfile, getWebTimbreProfile } from "./profiles";
 import { createSongPreset, type SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 
@@ -191,6 +191,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     node.connect(context.destination);
 
     core.on("meter", (data) => {
+      const profile = getMixProfile(this.song);
       this.meter = { min: data.min, max: data.max, ts: Date.now() };
       (globalThis as { __focusMusicDebug?: unknown }).__focusMusicDebug = {
         mode: this.mode,
@@ -199,7 +200,12 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
           name: this.song.name,
           key: describeSongKey(this.song),
           timbre: this.song.timbre,
-          progression: this.song.progression
+          progression: this.song.progression,
+          fx: {
+            reverb: profile.reverbBedSend,
+            echo: profile.echoSend,
+            glue: profile.glueAmount
+          }
         },
         isRunning: this.isRunning,
         contextState: this.context?.state ?? "unknown",
@@ -255,6 +261,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const song = this.song;
     const timbre = getWebTimbreProfile(song.timbre);
     const drums = getWebDrumKitProfile(song.drumKit);
+    const mixProfile = getMixProfile(song);
     const patterns = buildSongComposition(this.mode, song, this.evolveTick, cfg.pulseBpm);
     this.evolveTick += 1;
 
@@ -417,7 +424,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const bedRaw = el.add(...drones, bass, pulseTone, air, shimmer, riff);
     const bed = el.highpass(108 + song.subTrim * 120, 0.72, bedRaw);
 
-    const stereoDrift = el.mul(0.018 + timbre.stereoWidth * 0.012, el.cycle(0.006));
+    const stereoDrift = el.mul(0.01 + timbre.stereoWidth * mixProfile.stereoWidth * 0.014, el.cycle(0.006));
     const duckAmount = 0.18 + song.drumDensity * 0.17;
     const duck = el.sub(1, el.mul(duckAmount, kickEnv));
 
@@ -429,14 +436,50 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const leftDrums = el.mul(drumPresence, el.add(1, drumPan), drumShaped);
     const rightDrums = el.mul(drumPresence, el.sub(1, drumPan), drumShaped);
 
-    const preLeft = el.add(leftBed, leftCarrier, leftDrums);
-    const preRight = el.add(rightBed, rightCarrier, rightDrums);
+    const spaceSendLeft = el.add(
+      el.mul(mixProfile.reverbBedSend, leftBed),
+      el.mul(mixProfile.reverbDrumSend, leftDrums),
+      el.mul(mixProfile.reverbRiffSend, riff)
+    );
+    const spaceSendRight = el.add(
+      el.mul(mixProfile.reverbBedSend, rightBed),
+      el.mul(mixProfile.reverbDrumSend, rightDrums),
+      el.mul(mixProfile.reverbRiffSend, riff)
+    );
+    const spaceL1 = el.allpass(el.add(420, el.mul(300, el.cycle(0.037))), 0.72, spaceSendLeft);
+    const spaceR1 = el.allpass(el.add(460, el.mul(320, el.cycle(0.031))), 0.72, spaceSendRight);
+    const spaceL2 = el.allpass(el.add(760, el.mul(420, el.cycle(0.023))), 0.67, el.add(spaceL1, el.mul(0.22, spaceR1)));
+    const spaceR2 = el.allpass(el.add(830, el.mul(390, el.cycle(0.021))), 0.67, el.add(spaceR1, el.mul(0.22, spaceL1)));
+    const spaceLeft = el.lowpass(5200 + song.brightness * 1800, 0.68, spaceL2);
+    const spaceRight = el.lowpass(5200 + song.brightness * 1800, 0.68, spaceR2);
 
-    const eqLeft = el.highpass(44 + song.subTrim * 30, 0.74, el.lowshelf(140, 0.707, -7 - song.subTrim * 8, preLeft));
-    const eqRight = el.highpass(44 + song.subTrim * 30, 0.74, el.lowshelf(140, 0.707, -7 - song.subTrim * 8, preRight));
+    const echoInput = el.highpass(420, 0.72, el.add(leftBed, rightBed, el.mul(0.6, riff)));
+    const echoLeft = el.allpass(
+      el.add(1240, el.mul(760, el.cycle(0.017))),
+      Math.min(0.86, 0.52 + mixProfile.echoFeedback * 0.36),
+      el.mul(mixProfile.echoSend, echoInput)
+    );
+    const echoRight = el.allpass(
+      el.add(1420, el.mul(620, el.cycle(0.015))),
+      Math.min(0.86, 0.52 + mixProfile.echoFeedback * 0.36),
+      el.mul(mixProfile.echoSend, echoInput)
+    );
 
-    const left = el.tanh(el.mul(master, eqLeft));
-    const right = el.tanh(el.mul(master, eqRight));
+    const preLeft = el.add(leftBed, leftCarrier, leftDrums, spaceLeft, echoLeft);
+    const preRight = el.add(rightBed, rightCarrier, rightDrums, spaceRight, echoRight);
+
+    const glueKey = el.tanh(el.mul(2.6, el.add(el.mul(0.58, kickEnv), el.mul(0.34, snareEnv), el.mul(0.22, pulseEnv), el.mul(0.2, riffEnv))));
+    const glueDepth =
+      (mixProfile.glueAmount * (mixProfile.compRatio / (mixProfile.compRatio + 1))) / Math.max(0.25, mixProfile.compThreshold);
+    const glueGain = el.sub(1, el.mul(glueDepth, glueKey));
+    const gluedLeft = el.mul(glueGain, preLeft);
+    const gluedRight = el.mul(glueGain, preRight);
+
+    const eqLeft = el.highpass(44 + song.subTrim * 30, 0.74, el.lowshelf(140, 0.707, -7 - song.subTrim * 8, gluedLeft));
+    const eqRight = el.highpass(44 + song.subTrim * 30, 0.74, el.lowshelf(140, 0.707, -7 - song.subTrim * 8, gluedRight));
+
+    const left = el.tanh(el.mul(master, mixProfile.masterDrive, eqLeft));
+    const right = el.tanh(el.mul(master, mixProfile.masterDrive, eqRight));
 
     const meteredLeft = el.meter({ name: "focus-left-meter" }, left);
     const meteredRight = el.meter({ name: "focus-right-meter" }, right);

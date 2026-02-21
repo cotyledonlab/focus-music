@@ -1,4 +1,7 @@
 import type { SongDrumKit, SongTimbre } from "./song";
+import type { SongPreset } from "./song";
+
+import { Mulberry32 } from "./random";
 
 export type WebTimbreProfile = {
   droneSawMix: number;
@@ -44,6 +47,19 @@ export type NativeDrumKitProfile = {
   snareNoise: number;
   hatNoise: number;
   drive: number;
+};
+
+export type MixProfile = {
+  reverbBedSend: number;
+  reverbDrumSend: number;
+  reverbRiffSend: number;
+  echoSend: number;
+  echoFeedback: number;
+  stereoWidth: number;
+  glueAmount: number;
+  masterDrive: number;
+  compThreshold: number;
+  compRatio: number;
 };
 
 const WEB_TIMBRE_PROFILES: Record<SongTimbre, WebTimbreProfile> = {
@@ -211,6 +227,24 @@ export const getWebTimbreProfile = (timbre: SongTimbre) => WEB_TIMBRE_PROFILES[t
 export const getWebDrumKitProfile = (drumKit: SongDrumKit) => WEB_DRUM_KITS[drumKit];
 export const getNativeTimbreProfile = (timbre: SongTimbre) => NATIVE_TIMBRE_PROFILES[timbre];
 export const getNativeDrumKitProfile = (drumKit: SongDrumKit) => NATIVE_DRUM_KITS[drumKit];
+
+export const getMixProfile = (song: SongPreset): MixProfile => {
+  const rng = new Mulberry32(song.seed ^ 0x45d9f3b);
+  const lowHook = 1 - song.hookDensity;
+
+  return {
+    reverbBedSend: 0.12 + rng.range(0, 0.16) + lowHook * 0.08,
+    reverbDrumSend: 0.04 + rng.range(0, 0.09),
+    reverbRiffSend: 0.07 + rng.range(0, 0.16),
+    echoSend: 0.06 + rng.range(0, 0.14),
+    echoFeedback: 0.18 + rng.range(0, 0.32),
+    stereoWidth: 0.72 + rng.range(0, 0.3),
+    glueAmount: 0.12 + rng.range(0, 0.2) + song.drumDensity * 0.08,
+    masterDrive: 0.92 + rng.range(0, 0.26),
+    compThreshold: 0.34 + rng.range(0, 0.14),
+    compRatio: 2 + rng.range(0, 2.2)
+  };
+};
 
 export const PROFILE_KEYS = {
   timbres: ["analog", "glass", "noir", "dust"] as const,

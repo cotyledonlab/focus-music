@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { getSongBounds } from "../song";
+import { createSongPreset, getSongBounds } from "../song";
 import {
   PROFILE_KEYS,
+  getMixProfile,
   getNativeDrumKitProfile,
   getNativeTimbreProfile,
   getWebDrumKitProfile,
@@ -34,5 +35,31 @@ describe("audio profiles", () => {
         expect(PROFILE_KEYS.drumKits).toContain(kit);
       });
     });
+  });
+
+  it("creates deterministic mix profiles with sane bounds", () => {
+    const song = createSongPreset("focus", 999999);
+    const a = getMixProfile(song);
+    const b = getMixProfile(song);
+
+    expect(a).toEqual(b);
+    expect(a.reverbBedSend).toBeGreaterThan(0.1);
+    expect(a.reverbBedSend).toBeLessThan(0.4);
+    expect(a.reverbDrumSend).toBeGreaterThan(0.03);
+    expect(a.reverbDrumSend).toBeLessThan(0.2);
+    expect(a.echoSend).toBeGreaterThan(0.05);
+    expect(a.echoSend).toBeLessThan(0.25);
+    expect(a.echoFeedback).toBeGreaterThan(0.17);
+    expect(a.echoFeedback).toBeLessThan(0.55);
+    expect(a.stereoWidth).toBeGreaterThan(0.7);
+    expect(a.stereoWidth).toBeLessThan(1.05);
+    expect(a.glueAmount).toBeGreaterThan(0.1);
+    expect(a.glueAmount).toBeLessThan(0.45);
+    expect(a.masterDrive).toBeGreaterThan(0.9);
+    expect(a.masterDrive).toBeLessThan(1.2);
+    expect(a.compThreshold).toBeGreaterThan(0.3);
+    expect(a.compThreshold).toBeLessThan(0.5);
+    expect(a.compRatio).toBeGreaterThan(1.9);
+    expect(a.compRatio).toBeLessThan(4.3);
   });
 });

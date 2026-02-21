@@ -4,7 +4,7 @@ import * as FileSystem from "expo-file-system";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
 import { buildSongComposition, midiToHz } from "./composition";
-import { getNativeDrumKitProfile, getNativeTimbreProfile } from "./profiles";
+import { getMixProfile, getNativeDrumKitProfile, getNativeTimbreProfile } from "./profiles";
 import { createSongPreset, type SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 import { encodeStereoWavBase64 } from "./wav";
@@ -194,6 +194,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     const timbre = getNativeTimbreProfile(song.timbre);
     const drums = getNativeDrumKitProfile(song.drumKit);
+    const mixProfile = getMixProfile(song);
     const composition = buildSongComposition(this.mode, song, this.seedCounter, cfg.pulseBpm);
 
     const totalSamples = Math.floor(SAMPLE_RATE * SEGMENT_SECONDS);
@@ -214,6 +215,22 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     let prevInputR = 0;
     let prevOutputL = 0;
     let prevOutputR = 0;
+    const spaceDelayA = Math.max(1, Math.floor(SAMPLE_RATE * (0.17 + mixProfile.reverbBedSend * 0.24)));
+    const spaceDelayB = Math.max(1, Math.floor(SAMPLE_RATE * (0.28 + mixProfile.reverbRiffSend * 0.2)));
+    const echoDelay = Math.max(1, Math.floor(SAMPLE_RATE * (0.19 + mixProfile.echoSend * 0.25)));
+    const spaceBufferL1 = new Float32Array(spaceDelayA);
+    const spaceBufferR1 = new Float32Array(spaceDelayA);
+    const spaceBufferL2 = new Float32Array(spaceDelayB);
+    const spaceBufferR2 = new Float32Array(spaceDelayB);
+    const echoBufferL = new Float32Array(echoDelay);
+    const echoBufferR = new Float32Array(echoDelay);
+    let spaceIdx1 = 0;
+    let spaceIdx2 = 0;
+    let echoIdx = 0;
+    const compAttack = Math.exp(-1 / (SAMPLE_RATE * 0.01));
+    const compRelease = Math.exp(-1 / (SAMPLE_RATE * 0.18));
+    let compEnv = 0;
+    let compGain = 1;
 
     for (let i = 0; i < totalSamples; i += 1) {
       const t = i / SAMPLE_RATE;
@@ -313,18 +330,65 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
       const drumBus = (kick + snare + hat + openHat + clap + rim) * (0.9 + drums.drive);
       const duck = 1 - kickEnv * (0.13 + song.drumDensity * 0.1);
+      const bedLeft = (droneL + bass + pulse + riff + air + shimmer) * duck;
+      const bedRight = (droneR + bass + pulse + riff + air + shimmer) * duck;
+      const drumLeft = drumBus * (0.55 + song.drumDensity * 0.35) * 0.95;
+      const drumRight = drumBus * (0.55 + song.drumDensity * 0.35) * 1.05;
 
-      const leftDry =
-        leftBeat * 0.12 +
-        (droneL + bass + pulse + riff + air + shimmer) * duck +
-        drumBus * (0.55 + song.drumDensity * 0.35) * 0.95;
-      const rightDry =
-        rightBeat * 0.12 +
-        (droneR + bass + pulse + riff + air + shimmer) * duck +
-        drumBus * (0.55 + song.drumDensity * 0.35) * 1.05;
+      const spaceTapL1 = spaceBufferL1[spaceIdx1];
+      const spaceTapR1 = spaceBufferR1[spaceIdx1];
+      const spaceInL1 = bedLeft * mixProfile.reverbBedSend + drumLeft * mixProfile.reverbDrumSend + riff * mixProfile.reverbRiffSend;
+      const spaceInR1 = bedRight * mixProfile.reverbBedSend + drumRight * mixProfile.reverbDrumSend + riff * mixProfile.reverbRiffSend;
+      spaceBufferL1[spaceIdx1] = spaceInL1 + spaceTapL1 * 0.48 + spaceTapR1 * 0.14;
+      spaceBufferR1[spaceIdx1] = spaceInR1 + spaceTapR1 * 0.48 + spaceTapL1 * 0.14;
+      spaceIdx1 = (spaceIdx1 + 1) % spaceBufferL1.length;
 
-      const saturatedL = Math.tanh(leftDry * (0.84 + timbre.droneDrive + timbre.riffDrive));
-      const saturatedR = Math.tanh(rightDry * (0.84 + timbre.droneDrive + timbre.riffDrive));
+      const spaceTapL2 = spaceBufferL2[spaceIdx2];
+      const spaceTapR2 = spaceBufferR2[spaceIdx2];
+      spaceBufferL2[spaceIdx2] = spaceTapL1 + spaceTapL2 * 0.4;
+      spaceBufferR2[spaceIdx2] = spaceTapR1 + spaceTapR2 * 0.4;
+      spaceIdx2 = (spaceIdx2 + 1) % spaceBufferL2.length;
+
+      const spaceOutL = (spaceTapL1 * 0.56 + spaceTapL2 * 0.44) * (0.35 + mixProfile.reverbBedSend * 0.6);
+      const spaceOutR = (spaceTapR1 * 0.56 + spaceTapR2 * 0.44) * (0.35 + mixProfile.reverbBedSend * 0.6);
+
+      const echoTapL = echoBufferL[echoIdx];
+      const echoTapR = echoBufferR[echoIdx];
+      const echoInL = (bedLeft + riff * 0.55) * mixProfile.echoSend + echoTapL * mixProfile.echoFeedback + echoTapR * 0.08;
+      const echoInR = (bedRight + riff * 0.55) * mixProfile.echoSend + echoTapR * mixProfile.echoFeedback + echoTapL * 0.08;
+      echoBufferL[echoIdx] = echoInL;
+      echoBufferR[echoIdx] = echoInR;
+      echoIdx = (echoIdx + 1) % echoBufferL.length;
+      const echoOutL = echoTapL * 0.55;
+      const echoOutR = echoTapR * 0.55;
+
+      const preLeft = leftBeat * 0.12 + bedLeft + drumLeft + spaceOutL + echoOutL;
+      const preRight = rightBeat * 0.12 + bedRight + drumRight + spaceOutR + echoOutR;
+
+      const detector = Math.max(Math.abs(preLeft), Math.abs(preRight));
+      if (detector > compEnv) {
+        compEnv = compAttack * compEnv + (1 - compAttack) * detector;
+      } else {
+        compEnv = compRelease * compEnv + (1 - compRelease) * detector;
+      }
+
+      let targetGain = 1;
+      if (compEnv > mixProfile.compThreshold) {
+        const over = compEnv / mixProfile.compThreshold;
+        targetGain = Math.pow(over, 1 / mixProfile.compRatio - 1);
+      }
+      compGain += (targetGain - compGain) * 0.08;
+      const glueGain = (1 - mixProfile.glueAmount) + mixProfile.glueAmount * compGain;
+
+      const gluedL = preLeft * glueGain;
+      const gluedR = preRight * glueGain;
+      const mid = (gluedL + gluedR) * 0.5;
+      const side = (gluedL - gluedR) * 0.5 * mixProfile.stereoWidth;
+      const widenedL = mid + side;
+      const widenedR = mid - side;
+
+      const saturatedL = Math.tanh(widenedL * mixProfile.masterDrive * (0.84 + timbre.droneDrive + timbre.riffDrive));
+      const saturatedR = Math.tanh(widenedR * mixProfile.masterDrive * (0.84 + timbre.droneDrive + timbre.riffDrive));
 
       const hpL = hpAlpha * (prevOutputL + saturatedL - prevInputL);
       const hpR = hpAlpha * (prevOutputR + saturatedR - prevInputR);
