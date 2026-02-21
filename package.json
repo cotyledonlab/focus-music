@@ -13,6 +13,7 @@
   "dependencies": {
     "@elemaudio/core": "^4.0.1",
     "@elemaudio/web-renderer": "^4.0.3",
+    "@react-native-async-storage/async-storage": "1.23.1",
     "buffer": "^6.0.3",
     "expo": "~52.0.46",
     "expo-asset": "~11.0.5",

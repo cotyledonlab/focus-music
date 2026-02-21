@@ -4,6 +4,7 @@ import * as FileSystem from "expo-file-system";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
 import { Mulberry32 } from "./random";
+import { createSongPreset, type SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 import { encodeStereoWavBase64 } from "./wav";
 
@@ -19,6 +20,7 @@ type PreparedSound = {
 export class GenerativeMusicEngine implements IGenerativeMusicEngine {
   private mode: FocusMode = "focus";
   private volume = 0.6;
+  private song: SongPreset = createSongPreset("focus", 101_001);
   private active: PreparedSound | null = null;
   private warming: PreparedSound | null = null;
   private regenTimer: ReturnType<typeof setTimeout> | null = null;
@@ -26,9 +28,10 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
   private crossfading = false;
   private running = false;
 
-  async start({ mode, volume }: EngineStartOptions) {
+  async start({ mode, volume, song }: EngineStartOptions) {
     this.mode = mode;
     this.volume = volume;
+    this.song = song;
 
     await this.configureAudioSession();
 
@@ -69,6 +72,14 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     }
 
     this.mode = mode;
+
+    if (this.running && !this.crossfading) {
+      await this.crossfadeToNewSegment();
+    }
+  }
+
+  async setSong(song: SongPreset) {
+    this.song = song;
 
     if (this.running && !this.crossfading) {
       await this.crossfadeToNewSegment();
@@ -168,7 +179,8 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
   private async generateSegmentWavFile() {
     const cfg = MODE_CONFIGS[this.mode];
-    const rng = new Mulberry32(Date.now() + this.seedCounter * 9973);
+    const song = this.song;
+    const rng = new Mulberry32(song.seed + this.seedCounter * 9973);
     this.seedCounter += 1;
 
     const totalSamples = Math.floor(SAMPLE_RATE * SEGMENT_SECONDS);
@@ -177,7 +189,35 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     const phase = [rng.range(0, Math.PI * 2), rng.range(0, Math.PI * 2), rng.range(0, Math.PI * 2)];
     const lfoRates = [rng.range(0.004, 0.018), rng.range(0.003, 0.012), rng.range(0.002, 0.009)];
+    const riffScaleByMode: Record<FocusMode, number[]> = {
+      focus: [1, 1.125, 1.25, 1.333, 1.5, 1.667, 1.875],
+      relax: [1, 1.125, 1.2, 1.333, 1.5, 1.6, 1.8],
+      sleep: [1, 1.067, 1.2, 1.333, 1.5, 1.6, 1.778]
+    };
+    const riffRatios = Array.from({ length: 16 }, () => {
+      const bank = riffScaleByMode[this.mode];
+      return bank[Math.floor(rng.range(0, bank.length))] ?? 1;
+    });
+
+    const riffPattern = Array.from({ length: 16 }, (_, index) => {
+      if (index % 4 === 0) {
+        return 1;
+      }
+      return rng.chance(song.hookDensity) ? 1 : 0;
+    });
+
+    const swingDirection = (step: number) => (step % 2 === 0 ? -1 : 1);
     const twoPi = Math.PI * 2;
+
+    const masterHighpassHz = 75 + song.subTrim * 95;
+    const dt = 1 / SAMPLE_RATE;
+    const rc = 1 / (twoPi * masterHighpassHz);
+    const hpAlpha = rc / (rc + dt);
+
+    let prevInputL = 0;
+    let prevInputR = 0;
+    let prevOutputL = 0;
+    let prevOutputR = 0;
 
     for (let i = 0; i < totalSamples; i += 1) {
       const t = i / SAMPLE_RATE;
@@ -198,20 +238,43 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
         droneRight += Math.sin(twoPi * (freq * (1 + drift)) * t + phase[d]) * amp;
       }
 
-      const pulsePeriod = 60 / cfg.pulseBpm;
+      const pulsePeriod = 60 / (cfg.pulseBpm * song.tempoScale);
       const pulsePhase = (t % pulsePeriod) / pulsePeriod;
       const pulseEnv = Math.exp(-9.5 * pulsePhase);
       const pulseFreq = 42 + cfg.energy * 28 + 3.5 * Math.sin(twoPi * 0.07 * t + phase[1]);
-      const pulse = Math.sin(twoPi * pulseFreq * t + phase[2]) * pulseEnv * (0.06 + cfg.energy * 0.04);
+      const pulse = Math.sin(twoPi * pulseFreq * t + phase[2]) * pulseEnv * (0.05 + cfg.energy * 0.03 + song.drumDensity * 0.03);
+
+      const riffRate = (cfg.pulseBpm * song.tempoScale) / 60;
+      const swungTime = t + swingDirection(Math.floor(t * riffRate * 2)) * song.swing * 0.015;
+      const riffStep = Math.floor(swungTime * riffRate * 2) % riffRatios.length;
+      const riffGate = riffPattern[riffStep] ?? 0;
+      const riffPhase = (swungTime * riffRate * 2) % 1;
+      const riffEnv = riffGate ? Math.exp(-5.2 * riffPhase) : 0;
+      const riffFreq = cfg.droneRootHz * song.riffRegister * (riffRatios[riffStep] ?? 1);
+      const riffBase = Math.sin(twoPi * riffFreq * t + phase[2]);
+      const riffHarmonic = Math.sin(twoPi * riffFreq * 2.01 * t + phase[1]) * 0.32;
+      const riff = (riffBase + riffHarmonic) * riffEnv * (0.045 + song.hookDensity * 0.055);
 
       const movement = 0.02 * Math.sin(twoPi * 0.03 * t + phase[0]);
-      const shimmer = 0.0035 * Math.sin(twoPi * (1400 + cfg.warmth * 500) * t + phase[1]);
+      const shimmer = 0.003 * Math.sin(twoPi * (1400 + cfg.warmth * 500 + song.brightness * 360) * t + phase[1]);
 
-      const l = leftBeat * 0.16 + droneLeft + pulse + movement + shimmer;
-      const r = rightBeat * 0.16 + droneRight + pulse - movement + shimmer;
+      const l = leftBeat * 0.14 + droneLeft + pulse + movement + shimmer + riff;
+      const r = rightBeat * 0.14 + droneRight + pulse - movement + shimmer + riff;
 
-      left[i] = Math.tanh(l * 0.82);
-      right[i] = Math.tanh(r * 0.82);
+      const wetL = Math.tanh(l * 0.84);
+      const wetR = Math.tanh(r * 0.84);
+
+      // One-pole high-pass to reduce laptop-speaker rumble.
+      const hpL = hpAlpha * (prevOutputL + wetL - prevInputL);
+      const hpR = hpAlpha * (prevOutputR + wetR - prevInputR);
+
+      prevInputL = wetL;
+      prevInputR = wetR;
+      prevOutputL = hpL;
+      prevOutputR = hpR;
+
+      left[i] = hpL;
+      right[i] = hpR;
     }
 
     const wav = encodeStereoWavBase64(left, right, SAMPLE_RATE);

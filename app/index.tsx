@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ModeCard } from "../src/components/ModeCard";
@@ -9,7 +9,7 @@ import { theme } from "../src/constants/theme";
 import { usePlayer } from "../src/hooks/usePlayer";
 
 export default function HomeScreen() {
-  const { mode, selectMode } = usePlayer();
+  const { mode, selectMode, favoriteSongs, loadSong } = usePlayer();
 
   return (
     <LinearGradient
@@ -45,6 +45,29 @@ export default function HomeScreen() {
             );
           })}
         </View>
+
+        {favoriteSongs.length > 0 && (
+          <View style={styles.favoritesSection}>
+            <Text style={styles.favoritesTitle}>Favorite Songs</Text>
+            <View style={styles.favoriteList}>
+              {favoriteSongs.slice(0, 6).map((song) => (
+                <Pressable
+                  key={song.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Load ${song.name}`}
+                  onPress={() => {
+                    void loadSong(song);
+                    router.push({ pathname: "/player", params: { mode: song.mode } });
+                  }}
+                  style={({ pressed }) => [styles.favoriteCard, pressed && styles.favoriteCardPressed]}
+                >
+                  <Text style={styles.favoriteName}>{song.name}</Text>
+                  <Text style={styles.favoriteMeta}>{song.mode.toUpperCase()} · seed {song.seed}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
       </SafeAreaView>
     </LinearGradient>
   );
@@ -87,5 +110,39 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: theme.spacing.md
+  },
+  favoritesSection: {
+    marginTop: theme.spacing.xl,
+    gap: theme.spacing.sm
+  },
+  favoritesTitle: {
+    color: theme.colors.text,
+    fontSize: 17,
+    fontWeight: "600",
+    letterSpacing: 0.3
+  },
+  favoriteList: {
+    gap: theme.spacing.sm
+  },
+  favoriteCard: {
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: "rgba(102, 170, 255, 0.28)",
+    backgroundColor: "rgba(15, 28, 48, 0.82)",
+    paddingHorizontal: 14,
+    paddingVertical: 12
+  },
+  favoriteCardPressed: {
+    opacity: 0.82
+  },
+  favoriteName: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "600"
+  },
+  favoriteMeta: {
+    marginTop: 3,
+    color: theme.colors.muted,
+    fontSize: 12
   }
 });

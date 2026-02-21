@@ -1,8 +1,12 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PropsWithChildren } from "react";
 
 import { GenerativeMusicEngine } from "../audio/musicEngine";
+import { cloneSongForFavorite, createSongPreset, sanitizeSongPreset, type SongPreset } from "../audio/song";
 import type { IGenerativeMusicEngine } from "../audio/types";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
+
+const FAVORITES_STORAGE_KEY = "@focus-music/favorite-songs-v1";
 
 type PlayerContextValue = {
   mode: FocusMode;
@@ -13,10 +17,16 @@ type PlayerContextValue = {
   remainingSeconds: number | null;
   error: string | null;
   modeConfig: (typeof MODE_CONFIGS)[FocusMode];
+  currentSong: SongPreset;
+  favoriteSongs: SongPreset[];
+  isFavoriteCurrentSong: boolean;
   selectMode: (mode: FocusMode) => Promise<void>;
   togglePlayback: () => Promise<void>;
   setVolume: (value: number) => Promise<void>;
   setTimerMinutes: (minutes: number | null) => void;
+  generateSong: (mode?: FocusMode) => Promise<void>;
+  toggleFavoriteSong: () => void;
+  loadSong: (song: SongPreset) => Promise<void>;
 };
 
 const PlayerContext = createContext<PlayerContextValue | undefined>(undefined);
@@ -31,6 +41,8 @@ export const PlayerProvider = ({ children }: PropsWithChildren) => {
   }
 
   const [mode, setMode] = useState<FocusMode>("focus");
+  const [currentSong, setCurrentSong] = useState<SongPreset>(() => createSongPreset("focus"));
+  const [favoriteSongs, setFavoriteSongs] = useState<SongPreset[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +75,12 @@ export const PlayerProvider = ({ children }: PropsWithChildren) => {
         return;
       }
 
-      await engineRef.current.start({ mode, volume });
+      const activeMode = currentSong.mode;
+      if (activeMode !== mode) {
+        setMode(activeMode);
+      }
+
+      await engineRef.current.start({ mode: activeMode, volume, song: currentSong });
       setIsPlaying(true);
 
       if (timerSeconds && timerSeconds > 0) {
@@ -74,28 +91,68 @@ export const PlayerProvider = ({ children }: PropsWithChildren) => {
     } finally {
       setIsBusy(false);
     }
-  }, [isBusy, isPlaying, mode, timerSeconds, volume]);
+  }, [currentSong, isBusy, isPlaying, mode, timerSeconds, volume]);
 
-  const selectMode = useCallback(
-    async (nextMode: FocusMode) => {
-      if (!engineRef.current || mode === nextMode) {
-        setMode(nextMode);
+  const loadSong = useCallback(
+    async (song: SongPreset) => {
+      const normalized = cloneSongForFavorite(song, favoriteSongs.some((saved) => saved.id === song.id));
+      setCurrentSong(normalized);
+      setMode(normalized.mode);
+
+      if (!engineRef.current || !isPlaying) {
         return;
       }
 
+      try {
+        await engineRef.current.setMode(normalized.mode);
+        await engineRef.current.setSong(normalized);
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : "Failed to load song.");
+      }
+    },
+    [favoriteSongs, isPlaying]
+  );
+
+  const generateSong = useCallback(
+    async (targetMode?: FocusMode) => {
+      const nextMode = targetMode ?? mode;
+      const nextSong = createSongPreset(nextMode);
+
+      setCurrentSong(nextSong);
       setMode(nextMode);
 
-      if (!isPlaying) {
+      if (!engineRef.current || !isPlaying) {
         return;
       }
 
       try {
         await engineRef.current.setMode(nextMode);
+        await engineRef.current.setSong(nextSong);
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : "Failed to generate new song.");
+      }
+    },
+    [isPlaying, mode]
+  );
+
+  const selectMode = useCallback(
+    async (nextMode: FocusMode) => {
+      const nextSong = currentSong.mode === nextMode ? currentSong : createSongPreset(nextMode);
+      setMode(nextMode);
+      setCurrentSong(nextSong);
+
+      if (!engineRef.current || !isPlaying) {
+        return;
+      }
+
+      try {
+        await engineRef.current.setMode(nextMode);
+        await engineRef.current.setSong(nextSong);
       } catch (nextError) {
         setError(nextError instanceof Error ? nextError.message : "Failed to update mode.");
       }
     },
-    [isPlaying, mode]
+    [currentSong, isPlaying]
   );
 
   const setVolume = useCallback(
@@ -115,6 +172,23 @@ export const PlayerProvider = ({ children }: PropsWithChildren) => {
     },
     [isPlaying]
   );
+
+  const isFavoriteCurrentSong = favoriteSongs.some((song) => song.id === currentSong.id);
+
+  const toggleFavoriteSong = useCallback(() => {
+    const nextFavorite = !isFavoriteCurrentSong;
+
+    setFavoriteSongs((current) => {
+      if (!nextFavorite) {
+        return current.filter((song) => song.id !== currentSong.id);
+      }
+
+      const favorite = cloneSongForFavorite(currentSong, true);
+      return [favorite, ...current].slice(0, 24);
+    });
+
+    setCurrentSong((song) => cloneSongForFavorite(song, nextFavorite));
+  }, [currentSong, isFavoriteCurrentSong]);
 
   const setTimerMinutes = useCallback((minutes: number | null) => {
     if (!minutes || minutes <= 0) {
@@ -171,6 +245,31 @@ export const PlayerProvider = ({ children }: PropsWithChildren) => {
     };
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(FAVORITES_STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+
+        const parsed = JSON.parse(raw) as unknown[];
+        const favorites = parsed
+          .map((entry) => sanitizeSongPreset(typeof entry === "object" && entry != null ? (entry as Partial<SongPreset>) : {}))
+          .filter((song): song is SongPreset => Boolean(song))
+          .map((song) => cloneSongForFavorite(song, true));
+
+        setFavoriteSongs(favorites);
+      } catch {
+        // Ignore failed persistence reads.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    void AsyncStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoriteSongs));
+  }, [favoriteSongs]);
+
   const modeConfig = MODE_CONFIGS[mode];
 
   const value = useMemo<PlayerContextValue>(
@@ -183,12 +282,37 @@ export const PlayerProvider = ({ children }: PropsWithChildren) => {
       remainingSeconds,
       error,
       modeConfig,
+      currentSong,
+      favoriteSongs,
+      isFavoriteCurrentSong,
       selectMode,
       togglePlayback,
       setVolume,
-      setTimerMinutes
+      setTimerMinutes,
+      generateSong,
+      toggleFavoriteSong,
+      loadSong
     }),
-    [error, isBusy, isPlaying, mode, modeConfig, remainingSeconds, selectMode, setTimerMinutes, setVolume, timerSeconds, togglePlayback, volume]
+    [
+      currentSong,
+      error,
+      favoriteSongs,
+      generateSong,
+      isBusy,
+      isFavoriteCurrentSong,
+      isPlaying,
+      loadSong,
+      mode,
+      modeConfig,
+      remainingSeconds,
+      selectMode,
+      setTimerMinutes,
+      setVolume,
+      timerSeconds,
+      toggleFavoriteSong,
+      togglePlayback,
+      volume
+    ]
   );
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;

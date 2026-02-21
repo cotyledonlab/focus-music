@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 
+import type { SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 
 const createPlatformEngine = (): IGenerativeMusicEngine => {
@@ -29,6 +30,10 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
   async setMode(mode: EngineStartOptions["mode"]) {
     await this.engine.setMode(mode);
+  }
+
+  async setSong(song: SongPreset) {
+    await this.engine.setSong(song);
   }
 
   async setVolume(volume: number) {
