@@ -4,8 +4,8 @@ import WebRenderer from "@elemaudio/web-renderer";
 
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
-import { Mulberry32 } from "./random";
-import { createSongPreset, type SongPreset } from "./song";
+import { buildSongComposition, describeSongKey, midiToHz } from "./composition";
+import { createSongPreset, type SongDrumKit, type SongPreset, type SongTimbre } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 
 type ConstRef = {
@@ -22,66 +22,139 @@ type EngineRefs = {
   energy: ConstRef;
 };
 
-type PatternSet = {
-  seed: number;
-  chordSeq: number[];
-  voiceSeqs: number[][];
-  pulseGateSeq: number[];
-  pulsePitchSeq: number[];
-  pulseRate: number;
-  drumRate: number;
-  kickSeq: number[];
-  snareSeq: number[];
-  hatSeq: number[];
-  openHatSeq: number[];
-  clapSeq: number[];
-  rimSeq: number[];
-  riffRatioSeq: number[];
-  riffGateSeq: number[];
-  riffRate: number;
+type TimbreProfile = {
+  droneSawMix: number;
+  droneSquareMix: number;
+  droneDrive: number;
+  droneCutoffBase: number;
+  droneCutoffMove: number;
+  stereoWidth: number;
+  airGain: number;
+  shimmerGain: number;
+  riffSawMix: number;
+  riffSquareMix: number;
+  riffDrive: number;
+  riffCutoffBase: number;
+  riffCutoffMove: number;
 };
 
-const rotatePattern = (seq: number[], offset: number) => {
-  const n = seq.length;
-  if (!n) {
-    return seq;
+type DrumKitProfile = {
+  kickDecay: number;
+  kickClick: number;
+  kickSweep: number;
+  kickBase: number;
+  snareBody: number;
+  snareNoise: number;
+  hatMetal: number;
+  hatNoise: number;
+  clapNoise: number;
+  drive: number;
+};
+
+const TIMBRE_PROFILES: Record<SongTimbre, TimbreProfile> = {
+  analog: {
+    droneSawMix: 0.22,
+    droneSquareMix: 0.06,
+    droneDrive: 0.12,
+    droneCutoffBase: 480,
+    droneCutoffMove: 1800,
+    stereoWidth: 0.7,
+    airGain: 1,
+    shimmerGain: 0.9,
+    riffSawMix: 0.74,
+    riffSquareMix: 0.12,
+    riffDrive: 0.2,
+    riffCutoffBase: 750,
+    riffCutoffMove: 2200
+  },
+  glass: {
+    droneSawMix: 0.12,
+    droneSquareMix: 0.16,
+    droneDrive: 0.08,
+    droneCutoffBase: 620,
+    droneCutoffMove: 2600,
+    stereoWidth: 0.85,
+    airGain: 1.15,
+    shimmerGain: 1.22,
+    riffSawMix: 0.44,
+    riffSquareMix: 0.32,
+    riffDrive: 0.12,
+    riffCutoffBase: 1100,
+    riffCutoffMove: 2800
+  },
+  noir: {
+    droneSawMix: 0.18,
+    droneSquareMix: 0.1,
+    droneDrive: 0.18,
+    droneCutoffBase: 360,
+    droneCutoffMove: 1500,
+    stereoWidth: 0.62,
+    airGain: 0.74,
+    shimmerGain: 0.58,
+    riffSawMix: 0.68,
+    riffSquareMix: 0.18,
+    riffDrive: 0.28,
+    riffCutoffBase: 620,
+    riffCutoffMove: 1750
+  },
+  dust: {
+    droneSawMix: 0.26,
+    droneSquareMix: 0.08,
+    droneDrive: 0.24,
+    droneCutoffBase: 420,
+    droneCutoffMove: 1400,
+    stereoWidth: 0.74,
+    airGain: 0.92,
+    shimmerGain: 0.78,
+    riffSawMix: 0.58,
+    riffSquareMix: 0.24,
+    riffDrive: 0.35,
+    riffCutoffBase: 680,
+    riffCutoffMove: 1900
   }
-
-  const shift = ((offset % n) + n) % n;
-  return [...seq.slice(n - shift), ...seq.slice(0, n - shift)];
 };
 
-const euclideanPattern = (steps: number, pulses: number, rotation = 0) => {
-  const pattern: number[] = [];
-  let bucket = 0;
-
-  for (let i = 0; i < steps; i += 1) {
-    bucket += pulses;
-    if (bucket >= steps) {
-      bucket -= steps;
-      pattern.push(1);
-    } else {
-      pattern.push(0);
-    }
+const DRUM_KITS: Record<SongDrumKit, DrumKitProfile> = {
+  kit808: {
+    kickDecay: 0.22,
+    kickClick: 0.02,
+    kickSweep: 105,
+    kickBase: 34,
+    snareBody: 0.32,
+    snareNoise: 0.8,
+    hatMetal: 0.1,
+    hatNoise: 0.9,
+    clapNoise: 0.7,
+    drive: 0.12
+  },
+  kit909: {
+    kickDecay: 0.16,
+    kickClick: 0.07,
+    kickSweep: 145,
+    kickBase: 40,
+    snareBody: 0.48,
+    snareNoise: 1,
+    hatMetal: 0.24,
+    hatNoise: 1,
+    clapNoise: 0.9,
+    drive: 0.18
+  },
+  linndrum: {
+    kickDecay: 0.12,
+    kickClick: 0.05,
+    kickSweep: 82,
+    kickBase: 46,
+    snareBody: 0.55,
+    snareNoise: 0.72,
+    hatMetal: 0.15,
+    hatNoise: 0.82,
+    clapNoise: 0.85,
+    drive: 0.24
   }
-
-  return rotatePattern(pattern, rotation);
-};
-
-const withAnchors = (seq: number[], anchors: number[]) => {
-  const next = [...seq];
-  anchors.forEach((index) => {
-    const normalized = ((index % next.length) + next.length) % next.length;
-    next[normalized] = 1;
-  });
-  return next;
 };
 
 const createConstRef = (core: WebRenderer, key: string, value: number): ConstRef => {
-  const [node, set] = core.createRef("const", { key, value }, []) as [
-    NodeRepr_t,
-    (props: { value: number }) => Promise<unknown>
-  ];
+  const [node, set] = core.createRef("const", { key, value }, []) as [NodeRepr_t, (props: { value: number }) => Promise<unknown>];
 
   return { node, set };
 };
@@ -130,7 +203,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       clearInterval(this.evolveTimer);
     }
 
-    // Refresh the graph so rhythmic and harmonic patterns keep evolving.
+    // Refresh graph at phrase boundaries for evolving arrangements.
     this.evolveTimer = setInterval(() => {
       void this.renderGraph();
     }, 12000);
@@ -176,6 +249,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       return;
     }
 
+    await this.updateModeRefs();
     this.evolveTick += 1;
     await this.renderGraph();
   }
@@ -250,7 +324,13 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       this.meter = { min: data.min, max: data.max, ts: Date.now() };
       (globalThis as { __focusMusicDebug?: unknown }).__focusMusicDebug = {
         mode: this.mode,
-        song: { id: this.song.id, name: this.song.name },
+        song: {
+          id: this.song.id,
+          name: this.song.name,
+          key: describeSongKey(this.song),
+          timbre: this.song.timbre,
+          progression: this.song.progression
+        },
         isRunning: this.isRunning,
         contextState: this.context?.state ?? "unknown",
         currentTime: this.context?.currentTime ?? 0,
@@ -274,7 +354,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       master: createConstRef(this.core, "master", this.volume),
       beat: createConstRef(this.core, "beat", cfg.beatHz),
       carrier: createConstRef(this.core, "carrier", cfg.carrierHz),
-      root: createConstRef(this.core, "root", cfg.droneRootHz),
+      root: createConstRef(this.core, "root", midiToHz(this.song.rootMidi)),
       warmth: createConstRef(this.core, "warmth", cfg.warmth),
       energy: createConstRef(this.core, "energy", cfg.energy)
     };
@@ -290,106 +370,10 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     await Promise.all([
       this.refs.beat.set({ value: cfg.beatHz }),
       this.refs.carrier.set({ value: cfg.carrierHz }),
-      this.refs.root.set({ value: cfg.droneRootHz }),
+      this.refs.root.set({ value: midiToHz(this.song.rootMidi) }),
       this.refs.warmth.set({ value: cfg.warmth }),
       this.refs.energy.set({ value: cfg.energy })
     ]);
-  }
-
-  private buildPatterns(): PatternSet {
-    const cfg = MODE_CONFIGS[this.mode];
-    const song = this.song;
-    const seed = (song.seed + this.evolveTick * 9973) | 0;
-    const rng = new Mulberry32(seed);
-
-    const modeScale: Record<FocusMode, number[]> = {
-      focus: [1, 1.125, 1.25, 1.333, 1.5, 1.667, 1.875],
-      relax: [1, 1.125, 1.2, 1.333, 1.5, 1.6, 1.8],
-      sleep: [1, 1.067, 1.2, 1.333, 1.5, 1.6, 1.778]
-    };
-
-    const drumBpmByMode: Record<FocusMode, number> = {
-      focus: 122,
-      relax: 98,
-      sleep: 76
-    };
-
-    const scale = modeScale[this.mode];
-
-    const chordSeq = Array.from({ length: 8 }, () => {
-      return scale[Math.floor(rng.range(0, scale.length))] ?? 1;
-    });
-
-    const voiceSeqs = [0, 1, 2].map((voice) =>
-      Array.from({ length: 16 }, () => {
-        const span = 0.02 + voice * 0.01 + cfg.warmth * 0.01;
-        return 1 + rng.range(-span, span);
-      })
-    );
-
-    const pulseDensity = 0.35 + song.drumDensity * 0.55;
-    const pulseGateSeq = Array.from({ length: 32 }, (_, i) => {
-      if (i % 8 === 0) {
-        return 1;
-      }
-      return rng.chance(pulseDensity) ? 1 : 0;
-    });
-
-    const pitchPool = [42, 45, 48, 50, 52, 55, 57, 60].map((midi) =>
-      440 * Math.pow(2, (midi - 69) / 12)
-    );
-
-    const pulsePitchSeq = Array.from({ length: 32 }, () => {
-      return pitchPool[Math.floor(rng.range(0, pitchPool.length))] ?? 55;
-    });
-
-    const kickSeq = withAnchors(
-      euclideanPattern(16, Math.max(2, Math.round(3 + song.drumDensity * 4)), Math.floor(rng.range(0, 4))),
-      [0, 8]
-    );
-
-    const snareSeq = withAnchors(
-      euclideanPattern(16, Math.max(2, Math.round(2 + song.drumDensity * 2)), Math.floor(rng.range(0, 8))),
-      [4, 12]
-    );
-
-    const hatSeq = euclideanPattern(16, Math.max(5, Math.round(6 + song.drumDensity * 8)), Math.floor(rng.range(0, 16)));
-    const openHatSeq = euclideanPattern(16, Math.max(2, Math.round(2 + song.drumDensity * 3)), Math.floor(rng.range(0, 16)));
-    const clapSeq = withAnchors(
-      euclideanPattern(16, Math.max(2, Math.round(2 + song.drumDensity * 3)), Math.floor(rng.range(0, 16))),
-      [12]
-    );
-    const rimSeq = euclideanPattern(16, Math.max(1, Math.round(1 + song.drumDensity * 4)), Math.floor(rng.range(0, 16)));
-
-    const riffRatioSeq = Array.from({ length: 16 }, () => {
-      return scale[Math.floor(rng.range(0, scale.length))] ?? 1;
-    });
-
-    const riffGateSeq = Array.from({ length: 16 }, (_, i) => {
-      if (i % 4 === 0) {
-        return 1;
-      }
-      return rng.chance(song.hookDensity) ? 1 : 0;
-    });
-
-    return {
-      seed,
-      chordSeq,
-      voiceSeqs,
-      pulseGateSeq,
-      pulsePitchSeq,
-      pulseRate: (cfg.pulseBpm / 60) * song.tempoScale,
-      drumRate: (drumBpmByMode[this.mode] / 60) * song.tempoScale * 4,
-      kickSeq,
-      snareSeq,
-      hatSeq,
-      openHatSeq,
-      clapSeq,
-      rimSeq,
-      riffRatioSeq,
-      riffGateSeq,
-      riffRate: (drumBpmByMode[this.mode] / 60) * song.tempoScale * 2
-    };
   }
 
   private async renderGraph() {
@@ -399,7 +383,9 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     const cfg = MODE_CONFIGS[this.mode];
     const song = this.song;
-    const patterns = this.buildPatterns();
+    const timbre = TIMBRE_PROFILES[song.timbre];
+    const drums = DRUM_KITS[song.drumKit];
+    const patterns = buildSongComposition(this.mode, song, this.evolveTick, cfg.pulseBpm);
     this.evolveTick += 1;
 
     const reset = 0;
@@ -412,77 +398,104 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const energy = el.smooth(0.998, this.refs.energy.node);
 
     const chordStep = el.train((cfg.pulseBpm / 60) * song.tempoScale / 8 + 0.002);
-    const harmonicMotion = el.seq({ key: "harmonic-seq", seq: patterns.chordSeq, hold: true }, chordStep, reset);
+    const harmonicMotion = el.seq({ key: "harmonic-seq", seq: patterns.chordRatioSeq, hold: true }, chordStep, reset);
 
-    const drones = patterns.voiceSeqs.map((voiceSeq, i) => {
-      const step = el.seq({ key: `voice-seq-${i}`, seq: voiceSeq, hold: true }, el.train(0.06 + i * 0.02), reset);
-      const wobble = el.add(1, el.mul(0.01 + i * 0.005, el.cycle(0.007 + i * 0.004)));
-      const interval = cfg.droneIntervals[i % cfg.droneIntervals.length] ?? 1;
+    const padStep = el.train((cfg.pulseBpm / 60) * song.tempoScale / 4 + 0.002);
+    const drones = patterns.padRatioSeqs.map((padSeq, i) => {
+      const padRatio = el.seq({ key: `pad-ratio-${i}`, seq: padSeq, hold: true }, padStep, reset);
+      const drift = el.add(1, el.mul(0.004 + i * 0.002, el.cycle(0.008 + i * 0.004)));
+      const freq = el.mul(root, padRatio, drift);
 
-      const freq = el.mul(root, interval, harmonicMotion, step, wobble);
-      const osc = el.cycle(freq);
-      const cutoff = el.add(560, el.mul(1300, energy), el.mul(700, warmth), el.mul(1500, song.brightness));
-      const filtered = el.lowpass(cutoff, 0.72, osc);
+      const sine = el.cycle(freq);
+      const saw = el.blepsaw(el.mul(freq, 1.001 + i * 0.001));
+      const square = el.square(el.mul(freq, 0.5));
+      const fundamentalMix = Math.max(0.2, 1 - timbre.droneSawMix - timbre.droneSquareMix);
+      const osc = el.add(el.mul(fundamentalMix, sine), el.mul(timbre.droneSawMix, saw), el.mul(timbre.droneSquareMix, square));
 
-      return el.mul(0.08 + cfg.warmth * 0.04 - i * 0.01, filtered);
+      const cutoff = el.add(
+        timbre.droneCutoffBase,
+        el.mul(timbre.droneCutoffMove, song.brightness),
+        el.mul(1200, energy),
+        el.mul(620, warmth)
+      );
+      const filtered = el.lowpass(cutoff, 0.74, osc);
+      return el.mul(0.09 + cfg.warmth * 0.03 - i * 0.01, el.tanh(el.mul(1 + timbre.droneDrive, filtered)));
     });
+
+    const bassStep = el.train(patterns.pulseRate / 2 + 0.001);
+    const bassRatio = el.seq({ key: "bass-ratio", seq: patterns.bassRatioSeq, hold: true }, bassStep, reset);
+    const bass = el.mul(0.07, el.lowpass(180 + song.brightness * 90, 0.72, el.blepsaw(el.mul(root, bassRatio))));
 
     const pulseTrig = el.train(patterns.pulseRate);
     const pulseGate = el.seq({ key: "pulse-gate", seq: patterns.pulseGateSeq, hold: true }, pulseTrig, reset);
-    const pulsePitch = el.seq({ key: "pulse-pitch", seq: patterns.pulsePitchSeq, hold: true }, pulseTrig, reset);
+    const pulseRatio = el.seq({ key: "pulse-ratio", seq: patterns.pulseRatioSeq, hold: true }, pulseTrig, reset);
+    const pulseAccent = el.seq({ key: "pulse-accent", seq: patterns.pulseAccentSeq, hold: true }, pulseTrig, reset);
 
-    const pulseEnv = el.adsr(0.003, 0.09, 0, 0.15 + cfg.warmth * 0.2, pulseGate);
-    const pulseOsc = el.cycle(pulsePitch);
-    const pulseTone = el.mul(0.05 + cfg.energy * 0.04 + song.drumDensity * 0.03, pulseEnv, el.lowpass(220 + cfg.energy * 260, 0.9, pulseOsc));
+    const pulseEnv = el.adsr(0.002, 0.11, 0, 0.17 + cfg.warmth * 0.2, pulseGate);
+    const pulseFreq = el.mul(root, pulseRatio);
+    const pulseOsc = el.add(el.mul(0.72, el.cycle(pulseFreq)), el.mul(0.28, el.square(el.mul(pulseFreq, 2.01))));
+    const pulseTone = el.mul(
+      0.045 + cfg.energy * 0.035 + song.drumDensity * 0.026,
+      pulseAccent,
+      pulseEnv,
+      el.lowpass(250 + cfg.energy * 360 + song.brightness * 260, 0.84, pulseOsc)
+    );
 
     const air = el.mul(
-      0.008 + cfg.warmth * 0.015,
+      timbre.airGain * (0.007 + cfg.warmth * 0.014),
       el.lowpass(
-        el.add(1200, el.mul(1600, song.brightness), el.mul(900, warmth)),
-        0.65,
-        el.pinknoise({ key: "air-noise", seed: patterns.seed })
+        el.add(1400, el.mul(1900, song.brightness), el.mul(800, warmth)),
+        0.68,
+        el.pinknoise({ key: "air-noise", seed: patterns.seed + 1 })
       )
     );
 
-    const shimmer = el.mul(0.01 + cfg.energy * 0.01 + song.brightness * 0.02, el.cycle(el.mul(root, 0.5, harmonicMotion, el.add(1, el.mul(0.01, el.cycle(0.021))))));
+    const shimmer = el.mul(
+      timbre.shimmerGain * (0.008 + cfg.energy * 0.01 + song.brightness * 0.02),
+      el.cycle(el.mul(root, 0.5, harmonicMotion, el.add(1, el.mul(0.012, el.cycle(0.024)))))
+    );
 
     const drumStep = el.train(patterns.drumRate);
 
     const kickGate = el.seq({ key: "kick-seq", seq: patterns.kickSeq, hold: true }, drumStep, reset);
-    const kickEnv = el.adsr(0.001, 0.05, 0, 0.1 + cfg.warmth * 0.08, kickGate);
-    const kickPitch = el.add(38, el.mul(120, el.mul(kickEnv, kickEnv)));
+    const kickEnv = el.adsr(0.001, 0.06, 0, drums.kickDecay + cfg.warmth * 0.08, kickGate);
+    const kickPitch = el.add(drums.kickBase, el.mul(drums.kickSweep, el.mul(kickEnv, kickEnv)));
     const kickBody = el.cycle(kickPitch);
     const kickClick = el.highpass(2200, 0.72, el.noise({ key: "kick-click", seed: patterns.seed + 11 }));
     const kick = el.mul(
-      0.3 + song.drumDensity * 0.35,
-      el.tanh(el.add(el.mul(kickEnv, kickBody), el.mul(0.05, kickEnv, kickClick)))
+      0.25 + song.drumDensity * 0.31,
+      el.tanh(el.add(el.mul(kickEnv, kickBody), el.mul(drums.kickClick, kickEnv, kickClick)))
     );
 
     const snareGate = el.seq({ key: "snare-seq", seq: patterns.snareSeq, hold: true }, drumStep, reset);
-    const snareEnv = el.adsr(0.001, 0.04, 0, 0.14 + cfg.warmth * 0.08, snareGate);
+    const snareEnv = el.adsr(0.001, 0.05, 0, 0.13 + cfg.warmth * 0.08, snareGate);
     const snareNoise = el.bandpass(
-      2200 + cfg.energy * 1200 + song.brightness * 900,
+      1800 + cfg.energy * 1300 + song.brightness * 1000,
       0.86,
       el.noise({ key: "snare-noise", seed: patterns.seed + 17 })
     );
-    const snareBody = el.cycle(180 + cfg.energy * 32);
+    const snareBody = el.cycle(170 + cfg.energy * 45);
     const snare = el.mul(
-      0.12 + song.drumDensity * 0.16,
-      el.tanh(el.add(el.mul(snareEnv, snareNoise), el.mul(0.44, snareEnv, snareBody)))
+      0.1 + song.drumDensity * 0.14,
+      el.tanh(el.add(el.mul(snareEnv, snareNoise, drums.snareNoise), el.mul(drums.snareBody, snareEnv, snareBody)))
     );
 
     const hatGate = el.seq({ key: "hat-seq", seq: patterns.hatSeq, hold: true }, drumStep, reset);
-    const hatEnv = el.adsr(0.0008, 0.01, 0, 0.03, hatGate);
-    const hatNoise = el.highpass(5200 + song.brightness * 2200, 0.78, el.noise({ key: "hat-noise", seed: patterns.seed + 23 }));
-    const hatMetal = el.square(6500 + cfg.energy * 900 + song.brightness * 800);
-    const hats = el.mul(0.08 + song.drumDensity * 0.08, hatEnv, el.tanh(el.add(hatNoise, el.mul(0.2, hatMetal))));
+    const hatEnv = el.adsr(0.0008, 0.01, 0, 0.035, hatGate);
+    const hatNoise = el.highpass(5000 + song.brightness * 2600, 0.78, el.noise({ key: "hat-noise", seed: patterns.seed + 23 }));
+    const hatMetal = el.square(6100 + cfg.energy * 1200 + song.brightness * 1100);
+    const hats = el.mul(
+      0.07 + song.drumDensity * 0.08,
+      hatEnv,
+      el.tanh(el.add(el.mul(drums.hatNoise, hatNoise), el.mul(drums.hatMetal, hatMetal)))
+    );
 
     const openHatGate = el.seq({ key: "openh-seq", seq: patterns.openHatSeq, hold: true }, drumStep, reset);
-    const openHatEnv = el.adsr(0.001, 0.02, 0, 0.12 + cfg.warmth * 0.12, openHatGate);
+    const openHatEnv = el.adsr(0.001, 0.02, 0, 0.14 + cfg.warmth * 0.12, openHatGate);
     const openHat = el.mul(
-      0.06 + song.drumDensity * 0.06,
+      0.055 + song.drumDensity * 0.06,
       openHatEnv,
-      el.highpass(4100 + song.brightness * 1700, 0.74, el.pinknoise({ key: "openh-noise", seed: patterns.seed + 29 }))
+      el.highpass(3900 + song.brightness * 1900, 0.74, el.pinknoise({ key: "openh-noise", seed: patterns.seed + 29 }))
     );
 
     const clapGate = el.seq({ key: "clap-seq", seq: patterns.clapSeq, hold: true }, drumStep, reset);
@@ -490,49 +503,67 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const clap = el.mul(
       0.05 + song.drumDensity * 0.07,
       clapEnv,
-      el.bandpass(1600 + cfg.energy * 600 + song.brightness * 1200, 0.9, el.noise({ key: "clap-noise", seed: patterns.seed + 31 }))
+      el.bandpass(1400 + cfg.energy * 700 + song.brightness * 1000, 0.9, el.mul(drums.clapNoise, el.noise({ key: "clap-noise", seed: patterns.seed + 31 })))
     );
 
     const rimGate = el.seq({ key: "rim-seq", seq: patterns.rimSeq, hold: true }, drumStep, reset);
-    const rimEnv = el.adsr(0.001, 0.008, 0, 0.035, rimGate);
-    const rim = el.mul(0.03 + song.drumDensity * 0.04, rimEnv, el.cycle(1200 + cfg.energy * 220));
+    const rimEnv = el.adsr(0.001, 0.008, 0, 0.04, rimGate);
+    const rim = el.mul(0.025 + song.drumDensity * 0.035, rimEnv, el.cycle(1020 + cfg.energy * 320));
 
     const drumBus = el.add(kick, snare, hats, openHat, clap, rim);
-    const drumShaped = el.lowpass(10500 + song.brightness * 2200, 0.76, el.highpass(44 + song.subTrim * 16, 0.72, drumBus));
+    const drumShaped = el.tanh(
+      el.mul(
+        1 + drums.drive,
+        el.lowpass(10800 + song.brightness * 2100, 0.74, el.highpass(58 + song.subTrim * 36, 0.72, drumBus))
+      )
+    );
 
     const riffTrig = el.train(patterns.riffRate);
     const riffGate = el.seq({ key: "riff-gate", seq: patterns.riffGateSeq, hold: true }, riffTrig, reset);
     const riffRatio = el.seq({ key: "riff-ratio", seq: patterns.riffRatioSeq, hold: true }, riffTrig, reset);
-    const riffEnv = el.adsr(0.0015, 0.08, 0.08, 0.12 + song.hookDensity * 0.14, riffGate);
-    const riffFreq = el.mul(root, song.riffRegister, harmonicMotion, riffRatio, el.add(1, el.mul(song.swing, el.cycle(0.19))));
-    const riffOsc = el.add(el.mul(0.72, el.blepsaw(riffFreq)), el.mul(0.28, el.cycle(el.mul(riffFreq, 2.01))));
-    const riffFilter = el.lowpass(el.add(900, el.mul(1900, song.brightness), el.mul(700, energy)), 0.74, riffOsc);
-    const riffPhase = el.allpass(el.add(550, el.mul(420, el.cycle(0.08))), 0.66, riffFilter);
-    const riff = el.mul(0.06 + song.hookDensity * 0.12, riffEnv, riffPhase);
+    const riffAccent = el.seq({ key: "riff-accent", seq: patterns.riffAccentSeq, hold: true }, riffTrig, reset);
+    const riffEnv = el.adsr(0.0015, 0.08, 0.1, 0.12 + song.hookDensity * 0.16, riffGate);
+
+    const riffFreq = el.mul(root, song.riffRegister, riffRatio, el.add(1, el.mul(song.swing * 0.55, el.cycle(0.16))));
+    const riffSaw = el.blepsaw(riffFreq);
+    const riffSquare = el.square(el.mul(riffFreq, 1.004));
+    const riffSine = el.cycle(el.mul(riffFreq, 2.01));
+    const riffFundamental = Math.max(0.1, 1 - timbre.riffSawMix - timbre.riffSquareMix);
+    const riffOsc = el.add(el.mul(timbre.riffSawMix, riffSaw), el.mul(timbre.riffSquareMix, riffSquare), el.mul(riffFundamental, riffSine));
+    const riffFilter = el.lowpass(
+      el.add(timbre.riffCutoffBase, el.mul(timbre.riffCutoffMove, song.brightness), el.mul(700, energy)),
+      0.76,
+      riffOsc
+    );
+    const riffPhase = el.allpass(el.add(520, el.mul(440, el.cycle(0.08))), 0.66, riffFilter);
+    const riff = el.mul(0.05 + song.hookDensity * 0.11, riffAccent, riffEnv, el.tanh(el.mul(1 + timbre.riffDrive, riffPhase)));
 
     const leftCarrierFreq = el.sub(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.013)))), el.div(beat, 2));
     const rightCarrierFreq = el.add(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.017)))), el.div(beat, 2));
 
-    const leftCarrier = el.mul(0.14, el.cycle(leftCarrierFreq));
-    const rightCarrier = el.mul(0.14, el.cycle(rightCarrierFreq));
+    const leftCarrier = el.mul(0.13, el.cycle(leftCarrierFreq));
+    const rightCarrier = el.mul(0.13, el.cycle(rightCarrierFreq));
 
-    const bedRaw = el.add(...drones, pulseTone, air, shimmer, riff);
-    const bed = el.highpass(90 + song.subTrim * 100, 0.72, bedRaw);
+    const bedRaw = el.add(...drones, bass, pulseTone, air, shimmer, riff);
+    const bed = el.highpass(108 + song.subTrim * 120, 0.72, bedRaw);
 
-    const stereoDrift = el.mul(0.02, el.cycle(0.006));
-    const leftBed = el.mul(el.add(1, stereoDrift), bed);
-    const rightBed = el.mul(el.sub(1, stereoDrift), bed);
+    const stereoDrift = el.mul(0.018 + timbre.stereoWidth * 0.012, el.cycle(0.006));
+    const duckAmount = 0.18 + song.drumDensity * 0.17;
+    const duck = el.sub(1, el.mul(duckAmount, kickEnv));
+
+    const leftBed = el.mul(duck, el.add(1, stereoDrift), bed);
+    const rightBed = el.mul(duck, el.sub(1, stereoDrift), bed);
 
     const drumPan = el.mul(0.22, el.cycle(0.09));
-    const drumPresence = 0.2 + song.drumDensity * 0.6;
+    const drumPresence = 0.2 + song.drumDensity * 0.58;
     const leftDrums = el.mul(drumPresence, el.add(1, drumPan), drumShaped);
     const rightDrums = el.mul(drumPresence, el.sub(1, drumPan), drumShaped);
 
     const preLeft = el.add(leftBed, leftCarrier, leftDrums);
     const preRight = el.add(rightBed, rightCarrier, rightDrums);
 
-    const eqLeft = el.highpass(34 + song.subTrim * 20, 0.74, el.lowshelf(130, 0.707, -4 - song.subTrim * 6, preLeft));
-    const eqRight = el.highpass(34 + song.subTrim * 20, 0.74, el.lowshelf(130, 0.707, -4 - song.subTrim * 6, preRight));
+    const eqLeft = el.highpass(44 + song.subTrim * 30, 0.74, el.lowshelf(140, 0.707, -7 - song.subTrim * 8, preLeft));
+    const eqRight = el.highpass(44 + song.subTrim * 30, 0.74, el.lowshelf(140, 0.707, -7 - song.subTrim * 8, preRight));
 
     const left = el.tanh(el.mul(master, eqLeft));
     const right = el.tanh(el.mul(master, eqRight));
@@ -544,7 +575,13 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     (globalThis as { __focusMusicDebug?: unknown }).__focusMusicDebug = {
       mode: this.mode,
-      song: { id: this.song.id, name: this.song.name },
+      song: {
+        id: this.song.id,
+        name: this.song.name,
+        key: describeSongKey(this.song),
+        timbre: this.song.timbre,
+        progression: this.song.progression
+      },
       isRunning: this.isRunning,
       contextState: this.context?.state ?? "unknown",
       currentTime: this.context?.currentTime ?? 0,

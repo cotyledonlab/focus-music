@@ -7,6 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { PlayButton } from "../src/components/PlayButton";
 import { TimerPills } from "../src/components/TimerPills";
 import { VolumeControl } from "../src/components/VolumeControl";
+import { describeSongKey } from "../src/audio/composition";
 import { type FocusMode } from "../src/constants/modes";
 import { theme } from "../src/constants/theme";
 import { usePlayer } from "../src/hooks/usePlayer";
@@ -75,6 +76,9 @@ export default function PlayerScreen() {
           <Text style={styles.title}>{modeConfig.title} Session</Text>
           <Text style={styles.subtitle}>{modeConfig.subtitle}</Text>
           <Text style={styles.songLabel}>Song: {currentSong.name}</Text>
+          <Text style={styles.songMeta}>
+            {describeSongKey(currentSong)} · {currentSong.progression} · {currentSong.timbre} · {currentSong.drumKit}
+          </Text>
           <Text style={styles.songMeta}>Seed {currentSong.seed} · hook {Math.round(currentSong.hookDensity * 100)}%</Text>
           <Text style={styles.timerValue}>{formatCountdown(isPlaying ? remainingSeconds : timerSeconds)}</Text>
         </View>

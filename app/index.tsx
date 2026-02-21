@@ -3,6 +3,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { describeSongKey } from "../src/audio/composition";
 import { ModeCard } from "../src/components/ModeCard";
 import { MODE_ORDER, MODE_CONFIGS } from "../src/constants/modes";
 import { theme } from "../src/constants/theme";
@@ -62,7 +63,9 @@ export default function HomeScreen() {
                   style={({ pressed }) => [styles.favoriteCard, pressed && styles.favoriteCardPressed]}
                 >
                   <Text style={styles.favoriteName}>{song.name}</Text>
-                  <Text style={styles.favoriteMeta}>{song.mode.toUpperCase()} · seed {song.seed}</Text>
+                  <Text style={styles.favoriteMeta}>
+                    {song.mode.toUpperCase()} · {describeSongKey(song)} · {song.timbre}
+                  </Text>
                 </Pressable>
               ))}
             </View>
