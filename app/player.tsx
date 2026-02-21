@@ -79,7 +79,9 @@ export default function PlayerScreen() {
           <Text style={styles.songMeta}>
             {describeSongKey(currentSong)} · {currentSong.progression} · {currentSong.timbre} · {currentSong.drumKit}
           </Text>
-          <Text style={styles.songMeta}>Seed {currentSong.seed} · hook {Math.round(currentSong.hookDensity * 100)}%</Text>
+          <Text style={styles.songMeta}>
+            {currentSong.instrumentation} · Seed {currentSong.seed} · hook {Math.round(currentSong.hookDensity * 100)}%
+          </Text>
           <Text style={styles.timerValue}>{formatCountdown(isPlaying ? remainingSeconds : timerSeconds)}</Text>
         </View>
 

@@ -4,7 +4,7 @@ import * as FileSystem from "expo-file-system";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
 import { buildSongComposition, midiToHz } from "./composition";
-import { getMixProfile, getNativeDrumKitProfile, getNativeTimbreProfile } from "./profiles";
+import { getInstrumentationProfile, getMixProfile, getNativeDrumKitProfile, getNativeTimbreProfile } from "./profiles";
 import { createSongPreset, type SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 import { encodeStereoWavBase64 } from "./wav";
@@ -194,6 +194,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     const timbre = getNativeTimbreProfile(song.timbre);
     const drums = getNativeDrumKitProfile(song.drumKit);
+    const instrumentation = getInstrumentationProfile(song);
     const mixProfile = getMixProfile(song);
     const composition = buildSongComposition(this.mode, song, this.seedCounter, cfg.pulseBpm);
 
@@ -245,7 +246,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
       let droneL = 0;
       let droneR = 0;
-      for (let voice = 0; voice < 3; voice += 1) {
+      for (let voice = 0; voice < instrumentation.padVoices; voice += 1) {
         const ratio = composition.padRatioSeqs[voice]?.[padStep] ?? 1;
         const drift = 0.004 * Math.sin(TWO_PI * (0.011 + voice * 0.004) * t + phase[(voice + 1) % 3]);
         const freq = rootHz * ratio * (1 + drift);
@@ -264,7 +265,13 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
       const bassStep = Math.floor((t * composition.pulseRate) / 2) % composition.bassRatioSeq.length;
       const bassFreq = rootHz * (composition.bassRatioSeq[bassStep] ?? 0.5) * harmonicRatio;
-      const bass = Math.sin(TWO_PI * bassFreq * t + phase[1]) * (0.045 + song.drumDensity * 0.03);
+      const bassRaw =
+        instrumentation.bassModel === "sub"
+          ? Math.sin(TWO_PI * bassFreq * t + phase[1])
+          : instrumentation.bassModel === "pluck"
+            ? saw(bassFreq, t, phase[1]) * 0.62 + Math.sin(TWO_PI * bassFreq * 2 * t + phase[2]) * 0.38
+            : saw(bassFreq, t, phase[1]);
+      const bass = bassRaw * (0.045 + song.drumDensity * 0.03);
 
       const pulseStepFloat = t * composition.pulseRate;
       const pulseStep = Math.floor(pulseStepFloat) % composition.pulseGateSeq.length;
@@ -273,11 +280,13 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       const pulseAccent = composition.pulseAccentSeq[pulseStep] ?? 0.6;
       const pulseEnv = pulseGate ? Math.exp(-8.8 * pulsePhase) : 0;
       const pulseFreq = rootHz * (composition.pulseRatioSeq[pulseStep] ?? 0.25);
-      const pulse =
-        (Math.sin(TWO_PI * pulseFreq * t + phase[2]) * 0.72 + saw(pulseFreq * 2.01, t, phase[0]) * 0.28) *
-        pulseEnv *
-        pulseAccent *
-        (0.052 + cfg.energy * 0.03);
+      const pulseRaw =
+        instrumentation.pulseModel === "noise"
+          ? noise(i, segmentSeed + 7009)
+          : instrumentation.pulseModel === "fm"
+            ? Math.sin(TWO_PI * (pulseFreq + pulseFreq * 0.32 * Math.sin(TWO_PI * pulseFreq * 0.5 * t + phase[1])) * t + phase[2])
+            : Math.sin(TWO_PI * pulseFreq * t + phase[2]) * 0.72 + saw(pulseFreq * 2.01, t, phase[0]) * 0.28;
+      const pulse = pulseRaw * pulseEnv * pulseAccent * (0.052 + cfg.energy * 0.03);
 
       const drumStepFloat = t * composition.drumRate;
       const drumStep = Math.floor(drumStepFloat) % 16;
@@ -301,15 +310,16 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
       const openHatGate = composition.openHatSeq[drumStep] ?? 0;
       const openHatEnv = openHatGate ? Math.exp(-drumPhase / 0.12) : 0;
-      const openHat = noise(i, segmentSeed + 3007) * drums.hatNoise * openHatEnv * (0.03 + song.drumDensity * 0.04);
+      const openHat =
+        (instrumentation.openHatOn ? 1 : 0) * noise(i, segmentSeed + 3007) * drums.hatNoise * openHatEnv * (0.03 + song.drumDensity * 0.04);
 
       const clapGate = composition.clapSeq[drumStep] ?? 0;
       const clapEnv = clapGate ? Math.exp(-drumPhase / 0.09) : 0;
-      const clap = noise(i, segmentSeed + 4013) * clapEnv * (0.03 + song.drumDensity * 0.03);
+      const clap = (instrumentation.clapOn ? 1 : 0) * noise(i, segmentSeed + 4013) * clapEnv * (0.03 + song.drumDensity * 0.03);
 
       const rimGate = composition.rimSeq[drumStep] ?? 0;
       const rimEnv = rimGate ? Math.exp(-drumPhase / 0.04) : 0;
-      const rim = Math.sin(TWO_PI * (940 + cfg.energy * 260) * t) * rimEnv * (0.014 + song.drumDensity * 0.02);
+      const rim = (instrumentation.rimOn ? 1 : 0) * Math.sin(TWO_PI * (940 + cfg.energy * 260) * t) * rimEnv * (0.014 + song.drumDensity * 0.02);
 
       const riffStepFloat = t * composition.riffRate;
       const riffStep = Math.floor(riffStepFloat) % composition.riffGateSeq.length;
@@ -319,21 +329,25 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       const riffEnv = riffGate ? Math.exp(-5.2 * riffPhase) : 0;
       const riffRatio = composition.riffRatioSeq[riffStep] ?? 1;
       const riffFreq = rootHz * song.riffRegister * riffRatio * (1 + song.swing * 0.06 * Math.sin(TWO_PI * 0.17 * t));
+      const riffRaw =
+        instrumentation.riffModel === "square"
+          ? Math.sign(Math.sin(TWO_PI * riffFreq * t + phase[1])) * 0.72 + Math.sin(TWO_PI * riffFreq * 2 * t + phase[2]) * 0.28
+          : instrumentation.riffModel === "sine"
+            ? Math.sin(TWO_PI * riffFreq * t + phase[1]) * 0.78 + saw(riffFreq * 0.5, t, phase[2]) * 0.22
+            : saw(riffFreq, t, phase[1]) * 0.68 + Math.sin(TWO_PI * riffFreq * 2.01 * t + phase[2]) * 0.32;
       const riff =
-        (saw(riffFreq, t, phase[1]) * 0.68 + Math.sin(TWO_PI * riffFreq * 2.01 * t + phase[2]) * 0.32) *
-        riffEnv *
-        riffAccent *
-        (0.04 + song.hookDensity * 0.08);
+        (instrumentation.riffEnabled ? 1 : 0) * riffRaw * riffEnv * riffAccent * (0.04 + song.hookDensity * 0.08);
 
-      const air = noise(i, segmentSeed + 5009) * timbre.airGain * (0.006 + song.brightness * 0.012);
-      const shimmer = Math.sin(TWO_PI * (rootHz * 4.02 + song.brightness * 240) * t + phase[0]) * timbre.shimmerGain * 0.004;
+      const air = noise(i, segmentSeed + 5009) * timbre.airGain * instrumentation.airLevel * (0.006 + song.brightness * 0.012);
+      const shimmer =
+        Math.sin(TWO_PI * (rootHz * 4.02 + song.brightness * 240) * t + phase[0]) * timbre.shimmerGain * instrumentation.shimmerLevel * 0.004;
 
       const drumBus = (kick + snare + hat + openHat + clap + rim) * (0.9 + drums.drive);
       const duck = 1 - kickEnv * (0.13 + song.drumDensity * 0.1);
-      const bedLeft = (droneL + bass + pulse + riff + air + shimmer) * duck;
-      const bedRight = (droneR + bass + pulse + riff + air + shimmer) * duck;
-      const drumLeft = drumBus * (0.55 + song.drumDensity * 0.35) * 0.95;
-      const drumRight = drumBus * (0.55 + song.drumDensity * 0.35) * 1.05;
+      const bedLeft = (droneL + bass + pulse + riff + air + shimmer) * duck * instrumentation.bedLevel;
+      const bedRight = (droneR + bass + pulse + riff + air + shimmer) * duck * instrumentation.bedLevel;
+      const drumLeft = drumBus * (0.55 + song.drumDensity * 0.35) * 0.95 * instrumentation.drumLevel;
+      const drumRight = drumBus * (0.55 + song.drumDensity * 0.35) * 1.05 * instrumentation.drumLevel;
 
       const spaceTapL1 = spaceBufferL1[spaceIdx1];
       const spaceTapR1 = spaceBufferR1[spaceIdx1];
@@ -362,8 +376,8 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       const echoOutL = echoTapL * 0.55;
       const echoOutR = echoTapR * 0.55;
 
-      const preLeft = leftBeat * 0.12 + bedLeft + drumLeft + spaceOutL + echoOutL;
-      const preRight = rightBeat * 0.12 + bedRight + drumRight + spaceOutR + echoOutR;
+      const preLeft = leftBeat * instrumentation.carrierLevel + bedLeft + drumLeft + spaceOutL + echoOutL;
+      const preRight = rightBeat * instrumentation.carrierLevel + bedRight + drumRight + spaceOutR + echoOutR;
 
       const detector = Math.max(Math.abs(preLeft), Math.abs(preRight));
       if (detector > compEnv) {

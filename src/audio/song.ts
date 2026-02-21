@@ -21,6 +21,14 @@ export type SongGroove = "straight" | "shuffle" | "broken";
 
 export type SongHookStyle = "arpeggio" | "stabs" | "motif" | "glide";
 
+export type SongInstrumentation =
+  | "band"
+  | "pulseLab"
+  | "percussionForward"
+  | "droneNocturne"
+  | "riffMachine"
+  | "minimalDub";
+
 export type SongPreset = {
   id: string;
   mode: FocusMode;
@@ -33,6 +41,7 @@ export type SongPreset = {
   drumKit: SongDrumKit;
   groove: SongGroove;
   hookStyle: SongHookStyle;
+  instrumentation: SongInstrumentation;
   tempoScale: number;
   drumDensity: number;
   hookDensity: number;
@@ -69,6 +78,7 @@ export type SongBounds = {
   drumKits: SongDrumKit[];
   grooves: SongGroove[];
   hookStyles: SongHookStyle[];
+  instrumentations: SongInstrumentation[];
 };
 
 export const MODE_BOUNDS: Record<FocusMode, SongBounds> = {
@@ -86,7 +96,8 @@ export const MODE_BOUNDS: Record<FocusMode, SongBounds> = {
     timbres: ["analog", "glass", "noir", "dust"],
     drumKits: ["kit909", "kit808", "linndrum"],
     grooves: ["straight", "shuffle", "broken"],
-    hookStyles: ["arpeggio", "motif", "stabs", "glide"]
+    hookStyles: ["arpeggio", "motif", "stabs", "glide"],
+    instrumentations: ["band", "pulseLab", "percussionForward", "riffMachine", "minimalDub"]
   },
   relax: {
     rootMidi: { min: 43, max: 54 },
@@ -102,7 +113,8 @@ export const MODE_BOUNDS: Record<FocusMode, SongBounds> = {
     timbres: ["analog", "noir", "dust", "glass"],
     drumKits: ["kit808", "linndrum", "kit909"],
     grooves: ["shuffle", "straight", "broken"],
-    hookStyles: ["motif", "glide", "arpeggio", "stabs"]
+    hookStyles: ["motif", "glide", "arpeggio", "stabs"],
+    instrumentations: ["band", "pulseLab", "minimalDub", "droneNocturne"]
   },
   sleep: {
     rootMidi: { min: 40, max: 50 },
@@ -118,7 +130,8 @@ export const MODE_BOUNDS: Record<FocusMode, SongBounds> = {
     timbres: ["noir", "dust", "analog", "glass"],
     drumKits: ["linndrum", "kit808", "kit909"],
     grooves: ["straight", "shuffle", "broken"],
-    hookStyles: ["glide", "motif", "stabs", "arpeggio"]
+    hookStyles: ["glide", "motif", "stabs", "arpeggio"],
+    instrumentations: ["droneNocturne", "minimalDub", "pulseLab"]
   }
 };
 
@@ -171,7 +184,8 @@ const deriveIdentity = (mode: FocusMode, seed: number) => {
     timbre: pickOne(rng, bounds.timbres),
     drumKit: pickOne(rng, bounds.drumKits),
     groove: pickOne(rng, bounds.grooves),
-    hookStyle: pickOne(rng, bounds.hookStyles)
+    hookStyle: pickOne(rng, bounds.hookStyles),
+    instrumentation: pickOne(rng, bounds.instrumentations)
   };
 };
 
@@ -194,6 +208,7 @@ export const createSongPreset = (mode: FocusMode, seed = Date.now(), favorite = 
     drumKit: identity.drumKit,
     groove: identity.groove,
     hookStyle: identity.hookStyle,
+    instrumentation: identity.instrumentation,
     tempoScale: inRange(rng, bounds.tempoScale),
     drumDensity: inRange(rng, bounds.drumDensity),
     hookDensity: inRange(rng, bounds.hookDensity),
@@ -252,6 +267,7 @@ export const sanitizeSongPreset = (input: Partial<SongPreset>): SongPreset | nul
     drumKit: inValues(input.drumKit, bounds.drumKits, identity.drumKit),
     groove: inValues(input.groove, bounds.grooves, identity.groove),
     hookStyle: inValues(input.hookStyle, bounds.hookStyles, identity.hookStyle),
+    instrumentation: inValues(input.instrumentation, bounds.instrumentations, identity.instrumentation),
     tempoScale: clamp(typeof input.tempoScale === "number" ? input.tempoScale : bounds.tempoScale.min, bounds.tempoScale),
     drumDensity: clamp(typeof input.drumDensity === "number" ? input.drumDensity : bounds.drumDensity.min, bounds.drumDensity),
     hookDensity: clamp(typeof input.hookDensity === "number" ? input.hookDensity : bounds.hookDensity.min, bounds.hookDensity),

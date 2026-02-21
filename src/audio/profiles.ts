@@ -1,4 +1,4 @@
-import type { SongDrumKit, SongTimbre } from "./song";
+import type { SongDrumKit, SongInstrumentation, SongTimbre } from "./song";
 import type { SongPreset } from "./song";
 
 import { Mulberry32 } from "./random";
@@ -60,6 +60,22 @@ export type MixProfile = {
   masterDrive: number;
   compThreshold: number;
   compRatio: number;
+};
+
+export type InstrumentationProfile = {
+  padVoices: 1 | 2 | 3;
+  bassModel: "sub" | "saw" | "pluck";
+  pulseModel: "tone" | "fm" | "noise";
+  riffModel: "saw" | "square" | "sine";
+  riffEnabled: boolean;
+  carrierLevel: number;
+  bedLevel: number;
+  drumLevel: number;
+  airLevel: number;
+  shimmerLevel: number;
+  openHatOn: boolean;
+  clapOn: boolean;
+  rimOn: boolean;
 };
 
 const WEB_TIMBRE_PROFILES: Record<SongTimbre, WebTimbreProfile> = {
@@ -223,6 +239,99 @@ const NATIVE_DRUM_KITS: Record<SongDrumKit, NativeDrumKitProfile> = {
   }
 };
 
+const INSTRUMENTATION_PROFILES: Record<SongInstrumentation, InstrumentationProfile> = {
+  band: {
+    padVoices: 3,
+    bassModel: "saw",
+    pulseModel: "tone",
+    riffModel: "saw",
+    riffEnabled: true,
+    carrierLevel: 0.12,
+    bedLevel: 1,
+    drumLevel: 1,
+    airLevel: 1,
+    shimmerLevel: 1,
+    openHatOn: true,
+    clapOn: true,
+    rimOn: true
+  },
+  pulseLab: {
+    padVoices: 2,
+    bassModel: "pluck",
+    pulseModel: "fm",
+    riffModel: "square",
+    riffEnabled: true,
+    carrierLevel: 0.1,
+    bedLevel: 0.92,
+    drumLevel: 0.95,
+    airLevel: 0.9,
+    shimmerLevel: 1.1,
+    openHatOn: true,
+    clapOn: false,
+    rimOn: true
+  },
+  percussionForward: {
+    padVoices: 1,
+    bassModel: "sub",
+    pulseModel: "noise",
+    riffModel: "sine",
+    riffEnabled: false,
+    carrierLevel: 0.1,
+    bedLevel: 0.75,
+    drumLevel: 1.24,
+    airLevel: 0.78,
+    shimmerLevel: 0.72,
+    openHatOn: true,
+    clapOn: true,
+    rimOn: true
+  },
+  droneNocturne: {
+    padVoices: 3,
+    bassModel: "sub",
+    pulseModel: "tone",
+    riffModel: "sine",
+    riffEnabled: false,
+    carrierLevel: 0.16,
+    bedLevel: 1.14,
+    drumLevel: 0.55,
+    airLevel: 1.2,
+    shimmerLevel: 0.65,
+    openHatOn: false,
+    clapOn: false,
+    rimOn: false
+  },
+  riffMachine: {
+    padVoices: 2,
+    bassModel: "pluck",
+    pulseModel: "fm",
+    riffModel: "square",
+    riffEnabled: true,
+    carrierLevel: 0.08,
+    bedLevel: 0.88,
+    drumLevel: 1.05,
+    airLevel: 0.72,
+    shimmerLevel: 1.05,
+    openHatOn: true,
+    clapOn: false,
+    rimOn: true
+  },
+  minimalDub: {
+    padVoices: 1,
+    bassModel: "sub",
+    pulseModel: "tone",
+    riffModel: "saw",
+    riffEnabled: true,
+    carrierLevel: 0.1,
+    bedLevel: 0.84,
+    drumLevel: 0.82,
+    airLevel: 0.82,
+    shimmerLevel: 0.8,
+    openHatOn: false,
+    clapOn: true,
+    rimOn: false
+  }
+};
+
 export const getWebTimbreProfile = (timbre: SongTimbre) => WEB_TIMBRE_PROFILES[timbre];
 export const getWebDrumKitProfile = (drumKit: SongDrumKit) => WEB_DRUM_KITS[drumKit];
 export const getNativeTimbreProfile = (timbre: SongTimbre) => NATIVE_TIMBRE_PROFILES[timbre];
@@ -246,7 +355,23 @@ export const getMixProfile = (song: SongPreset): MixProfile => {
   };
 };
 
+export const getInstrumentationProfile = (song: SongPreset): InstrumentationProfile => {
+  const base = INSTRUMENTATION_PROFILES[song.instrumentation];
+  const rng = new Mulberry32(song.seed ^ 0x3c6ef372);
+  const width = 0.92 + rng.range(0, 0.18);
+  const bed = base.bedLevel * (0.95 + rng.range(0, 0.12));
+  const drums = base.drumLevel * (0.95 + rng.range(0, 0.12));
+
+  return {
+    ...base,
+    carrierLevel: base.carrierLevel * width,
+    bedLevel: bed,
+    drumLevel: drums
+  };
+};
+
 export const PROFILE_KEYS = {
   timbres: ["analog", "glass", "noir", "dust"] as const,
-  drumKits: ["kit808", "kit909", "linndrum"] as const
+  drumKits: ["kit808", "kit909", "linndrum"] as const,
+  instrumentations: ["band", "pulseLab", "percussionForward", "droneNocturne", "riffMachine", "minimalDub"] as const
 };

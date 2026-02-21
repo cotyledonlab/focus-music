@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createSongPreset, getSongBounds } from "../song";
 import {
   PROFILE_KEYS,
+  getInstrumentationProfile,
   getMixProfile,
   getNativeDrumKitProfile,
   getNativeTimbreProfile,
@@ -34,6 +35,10 @@ describe("audio profiles", () => {
       bounds.drumKits.forEach((kit) => {
         expect(PROFILE_KEYS.drumKits).toContain(kit);
       });
+
+      bounds.instrumentations.forEach((instrumentation) => {
+        expect(PROFILE_KEYS.instrumentations).toContain(instrumentation);
+      });
     });
   });
 
@@ -61,5 +66,21 @@ describe("audio profiles", () => {
     expect(a.compThreshold).toBeLessThan(0.5);
     expect(a.compRatio).toBeGreaterThan(1.9);
     expect(a.compRatio).toBeLessThan(4.3);
+  });
+
+  it("creates deterministic instrumentation profiles", () => {
+    const song = createSongPreset("relax", 121212);
+    const a = getInstrumentationProfile(song);
+    const b = getInstrumentationProfile(song);
+
+    expect(a).toEqual(b);
+    expect(a.padVoices).toBeGreaterThanOrEqual(1);
+    expect(a.padVoices).toBeLessThanOrEqual(3);
+    expect(a.carrierLevel).toBeGreaterThan(0.06);
+    expect(a.carrierLevel).toBeLessThan(0.2);
+    expect(a.bedLevel).toBeGreaterThan(0.65);
+    expect(a.bedLevel).toBeLessThan(1.3);
+    expect(a.drumLevel).toBeGreaterThan(0.5);
+    expect(a.drumLevel).toBeLessThan(1.35);
   });
 });

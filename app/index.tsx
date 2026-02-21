@@ -64,7 +64,7 @@ export default function HomeScreen() {
                 >
                   <Text style={styles.favoriteName}>{song.name}</Text>
                   <Text style={styles.favoriteMeta}>
-                    {song.mode.toUpperCase()} · {describeSongKey(song)} · {song.timbre}
+                    {song.mode.toUpperCase()} · {describeSongKey(song)} · {song.timbre} · {song.instrumentation}
                   </Text>
                 </Pressable>
               ))}

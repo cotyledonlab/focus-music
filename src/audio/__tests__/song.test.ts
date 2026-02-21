@@ -21,6 +21,7 @@ describe("song presets", () => {
     expect(a.drumKit).toBe(b.drumKit);
     expect(a.groove).toBe(b.groove);
     expect(a.hookStyle).toBe(b.hookStyle);
+    expect(a.instrumentation).toBe(b.instrumentation);
     expect(a.tempoScale).toBe(b.tempoScale);
     expect(a.drumDensity).toBe(b.drumDensity);
     expect(a.hookDensity).toBe(b.hookDensity);
@@ -54,6 +55,7 @@ describe("song presets", () => {
         expect(bounds.drumKits).toContain(song.drumKit);
         expect(bounds.grooves).toContain(song.groove);
         expect(bounds.hookStyles).toContain(song.hookStyle);
+        expect(bounds.instrumentations).toContain(song.instrumentation);
       }
     });
   });
@@ -95,6 +97,7 @@ describe("song presets", () => {
     expect(bounds.drumKits).toContain(migrated.drumKit);
     expect(bounds.grooves).toContain(migrated.groove);
     expect(bounds.hookStyles).toContain(migrated.hookStyle);
+    expect(bounds.instrumentations).toContain(migrated.instrumentation);
   });
 
   it("rejects invalid presets", () => {

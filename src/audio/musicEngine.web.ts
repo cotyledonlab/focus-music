@@ -5,7 +5,7 @@ import WebRenderer from "@elemaudio/web-renderer";
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
 import { buildSongComposition, describeSongKey, midiToHz } from "./composition";
-import { getMixProfile, getWebDrumKitProfile, getWebTimbreProfile } from "./profiles";
+import { getInstrumentationProfile, getMixProfile, getWebDrumKitProfile, getWebTimbreProfile } from "./profiles";
 import { createSongPreset, type SongPreset } from "./song";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 
@@ -201,6 +201,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
           key: describeSongKey(this.song),
           timbre: this.song.timbre,
           progression: this.song.progression,
+          instrumentation: this.song.instrumentation,
           fx: {
             reverb: profile.reverbBedSend,
             echo: profile.echoSend,
@@ -261,6 +262,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const song = this.song;
     const timbre = getWebTimbreProfile(song.timbre);
     const drums = getWebDrumKitProfile(song.drumKit);
+    const instrumentation = getInstrumentationProfile(song);
     const mixProfile = getMixProfile(song);
     const patterns = buildSongComposition(this.mode, song, this.evolveTick, cfg.pulseBpm);
     this.evolveTick += 1;
@@ -296,12 +298,22 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
         el.mul(620, warmth)
       );
       const filtered = el.lowpass(cutoff, 0.74, osc);
-      return el.mul(0.09 + cfg.warmth * 0.03 - i * 0.01, el.tanh(el.mul(1 + timbre.droneDrive, filtered)));
+      const layerOn = i < instrumentation.padVoices ? 1 : 0;
+      return el.mul(layerOn, 0.09 + cfg.warmth * 0.03 - i * 0.01, el.tanh(el.mul(1 + timbre.droneDrive, filtered)));
     });
 
     const bassStep = el.train(patterns.pulseRate / 2 + 0.001);
     const bassRatio = el.seq({ key: "bass-ratio", seq: patterns.bassRatioSeq, hold: true }, bassStep, reset);
-    const bass = el.mul(0.07, el.lowpass(180 + song.brightness * 90, 0.72, el.blepsaw(el.mul(root, bassRatio))));
+    const bassGate = el.seq({ key: "bass-gate", seq: patterns.pulseGateSeq, hold: true }, bassStep, reset);
+    const bassEnv = el.adsr(0.002, 0.12, 0.35, 0.16, bassGate);
+    const bassFreq = el.mul(root, bassRatio);
+    const bassOsc =
+      instrumentation.bassModel === "sub"
+        ? el.cycle(bassFreq)
+        : instrumentation.bassModel === "pluck"
+          ? el.bandpass(220 + song.brightness * 260, 0.76, el.add(el.mul(0.68, el.blepsaw(bassFreq)), el.mul(0.32, el.square(el.mul(bassFreq, 2)))))
+          : el.lowpass(210 + song.brightness * 140, 0.72, el.blepsaw(el.mul(bassFreq, 1.01)));
+    const bass = el.mul(instrumentation.bedLevel * (0.058 + song.drumDensity * 0.02), bassEnv, bassOsc);
 
     const pulseTrig = el.train(patterns.pulseRate);
     const pulseGate = el.seq({ key: "pulse-gate", seq: patterns.pulseGateSeq, hold: true }, pulseTrig, reset);
@@ -310,16 +322,21 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     const pulseEnv = el.adsr(0.002, 0.11, 0, 0.17 + cfg.warmth * 0.2, pulseGate);
     const pulseFreq = el.mul(root, pulseRatio);
-    const pulseOsc = el.add(el.mul(0.72, el.cycle(pulseFreq)), el.mul(0.28, el.square(el.mul(pulseFreq, 2.01))));
+    const pulseOsc =
+      instrumentation.pulseModel === "noise"
+        ? el.bandpass(520 + cfg.energy * 740 + song.brightness * 420, 0.8, el.noise({ key: "pulse-noise", seed: patterns.seed + 9 }))
+        : instrumentation.pulseModel === "fm"
+          ? el.cycle(el.add(pulseFreq, el.mul(0.38, pulseFreq, el.cycle(el.mul(pulseFreq, 0.5)))))
+          : el.add(el.mul(0.72, el.cycle(pulseFreq)), el.mul(0.28, el.square(el.mul(pulseFreq, 2.01))));
     const pulseTone = el.mul(
-      0.045 + cfg.energy * 0.035 + song.drumDensity * 0.026,
+      instrumentation.bedLevel * (0.045 + cfg.energy * 0.035 + song.drumDensity * 0.026),
       pulseAccent,
       pulseEnv,
       el.lowpass(250 + cfg.energy * 360 + song.brightness * 260, 0.84, pulseOsc)
     );
 
     const air = el.mul(
-      timbre.airGain * (0.007 + cfg.warmth * 0.014),
+      timbre.airGain * instrumentation.airLevel * (0.007 + cfg.warmth * 0.014),
       el.lowpass(
         el.add(1400, el.mul(1900, song.brightness), el.mul(800, warmth)),
         0.68,
@@ -328,7 +345,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     );
 
     const shimmer = el.mul(
-      timbre.shimmerGain * (0.008 + cfg.energy * 0.01 + song.brightness * 0.02),
+      timbre.shimmerGain * instrumentation.shimmerLevel * (0.008 + cfg.energy * 0.01 + song.brightness * 0.02),
       el.cycle(el.mul(root, 0.5, harmonicMotion, el.add(1, el.mul(0.012, el.cycle(0.024)))))
     );
 
@@ -370,6 +387,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const openHatGate = el.seq({ key: "openh-seq", seq: patterns.openHatSeq, hold: true }, drumStep, reset);
     const openHatEnv = el.adsr(0.001, 0.02, 0, 0.14 + cfg.warmth * 0.12, openHatGate);
     const openHat = el.mul(
+      instrumentation.openHatOn ? 1 : 0,
       0.055 + song.drumDensity * 0.06,
       openHatEnv,
       el.highpass(3900 + song.brightness * 1900, 0.74, el.pinknoise({ key: "openh-noise", seed: patterns.seed + 29 }))
@@ -378,6 +396,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const clapGate = el.seq({ key: "clap-seq", seq: patterns.clapSeq, hold: true }, drumStep, reset);
     const clapEnv = el.adsr(0.001, 0.02, 0, 0.11, clapGate);
     const clap = el.mul(
+      instrumentation.clapOn ? 1 : 0,
       0.05 + song.drumDensity * 0.07,
       clapEnv,
       el.bandpass(1400 + cfg.energy * 700 + song.brightness * 1000, 0.9, el.mul(drums.clapNoise, el.noise({ key: "clap-noise", seed: patterns.seed + 31 })))
@@ -385,7 +404,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
     const rimGate = el.seq({ key: "rim-seq", seq: patterns.rimSeq, hold: true }, drumStep, reset);
     const rimEnv = el.adsr(0.001, 0.008, 0, 0.04, rimGate);
-    const rim = el.mul(0.025 + song.drumDensity * 0.035, rimEnv, el.cycle(1020 + cfg.energy * 320));
+    const rim = el.mul(instrumentation.rimOn ? 1 : 0, 0.025 + song.drumDensity * 0.035, rimEnv, el.cycle(1020 + cfg.energy * 320));
 
     const drumBus = el.add(kick, snare, hats, openHat, clap, rim);
     const drumShaped = el.tanh(
@@ -405,24 +424,33 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const riffSaw = el.blepsaw(riffFreq);
     const riffSquare = el.square(el.mul(riffFreq, 1.004));
     const riffSine = el.cycle(el.mul(riffFreq, 2.01));
-    const riffFundamental = Math.max(0.1, 1 - timbre.riffSawMix - timbre.riffSquareMix);
-    const riffOsc = el.add(el.mul(timbre.riffSawMix, riffSaw), el.mul(timbre.riffSquareMix, riffSquare), el.mul(riffFundamental, riffSine));
+    const riffOsc =
+      instrumentation.riffModel === "square"
+        ? el.add(el.mul(0.68, riffSquare), el.mul(0.32, riffSine))
+        : instrumentation.riffModel === "sine"
+          ? el.add(el.mul(0.76, riffSine), el.mul(0.24, riffSaw))
+          : (() => {
+              const riffFundamental = Math.max(0.1, 1 - timbre.riffSawMix - timbre.riffSquareMix);
+              return el.add(el.mul(timbre.riffSawMix, riffSaw), el.mul(timbre.riffSquareMix, riffSquare), el.mul(riffFundamental, riffSine));
+            })();
     const riffFilter = el.lowpass(
       el.add(timbre.riffCutoffBase, el.mul(timbre.riffCutoffMove, song.brightness), el.mul(700, energy)),
       0.76,
       riffOsc
     );
     const riffPhase = el.allpass(el.add(520, el.mul(440, el.cycle(0.08))), 0.66, riffFilter);
-    const riff = el.mul(0.05 + song.hookDensity * 0.11, riffAccent, riffEnv, el.tanh(el.mul(1 + timbre.riffDrive, riffPhase)));
+    const riff = instrumentation.riffEnabled
+      ? el.mul(0.05 + song.hookDensity * 0.11, riffAccent, riffEnv, el.tanh(el.mul(1 + timbre.riffDrive, riffPhase)))
+      : 0;
 
     const leftCarrierFreq = el.sub(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.013)))), el.div(beat, 2));
     const rightCarrierFreq = el.add(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.017)))), el.div(beat, 2));
 
-    const leftCarrier = el.mul(0.13, el.cycle(leftCarrierFreq));
-    const rightCarrier = el.mul(0.13, el.cycle(rightCarrierFreq));
+    const leftCarrier = el.mul(instrumentation.carrierLevel, el.cycle(leftCarrierFreq));
+    const rightCarrier = el.mul(instrumentation.carrierLevel, el.cycle(rightCarrierFreq));
 
     const bedRaw = el.add(...drones, bass, pulseTone, air, shimmer, riff);
-    const bed = el.highpass(108 + song.subTrim * 120, 0.72, bedRaw);
+    const bed = el.highpass(108 + song.subTrim * 120, 0.72, el.mul(instrumentation.bedLevel, bedRaw));
 
     const stereoDrift = el.mul(0.01 + timbre.stereoWidth * mixProfile.stereoWidth * 0.014, el.cycle(0.006));
     const duckAmount = 0.18 + song.drumDensity * 0.17;
@@ -432,7 +460,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const rightBed = el.mul(duck, el.sub(1, stereoDrift), bed);
 
     const drumPan = el.mul(0.22, el.cycle(0.09));
-    const drumPresence = 0.2 + song.drumDensity * 0.58;
+    const drumPresence = (0.2 + song.drumDensity * 0.58) * instrumentation.drumLevel;
     const leftDrums = el.mul(drumPresence, el.add(1, drumPan), drumShaped);
     const rightDrums = el.mul(drumPresence, el.sub(1, drumPan), drumShaped);
 
@@ -468,7 +496,10 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const preLeft = el.add(leftBed, leftCarrier, leftDrums, spaceLeft, echoLeft);
     const preRight = el.add(rightBed, rightCarrier, rightDrums, spaceRight, echoRight);
 
-    const glueKey = el.tanh(el.mul(2.6, el.add(el.mul(0.58, kickEnv), el.mul(0.34, snareEnv), el.mul(0.22, pulseEnv), el.mul(0.2, riffEnv))));
+    const riffEnvForGlue = instrumentation.riffEnabled ? riffEnv : 0;
+    const glueKey = el.tanh(
+      el.mul(2.6, el.add(el.mul(0.58, kickEnv), el.mul(0.34, snareEnv), el.mul(0.22, pulseEnv), el.mul(0.2, riffEnvForGlue)))
+    );
     const glueDepth =
       (mixProfile.glueAmount * (mixProfile.compRatio / (mixProfile.compRatio + 1))) / Math.max(0.25, mixProfile.compThreshold);
     const glueGain = el.sub(1, el.mul(glueDepth, glueKey));
@@ -493,7 +524,13 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
         name: this.song.name,
         key: describeSongKey(this.song),
         timbre: this.song.timbre,
-        progression: this.song.progression
+        progression: this.song.progression,
+        instrumentation: this.song.instrumentation,
+        fx: {
+          reverb: mixProfile.reverbBedSend,
+          echo: mixProfile.echoSend,
+          glue: mixProfile.glueAmount
+        }
       },
       isRunning: this.isRunning,
       contextState: this.context?.state ?? "unknown",
