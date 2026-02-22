@@ -32,6 +32,10 @@ Generative focus audio app scaffold inspired by Brain.fm, built with Expo Router
 - `app/index.tsx`: mode selection + favorite-song quick launch
 - `app/player.tsx`: playback controls
 
+## Architecture
+
+- `docs/architecture.md`: C4-style Mermaid diagrams (system context, containers, audio components, runtime sequence)
+
 ## Audio Engine
 
 - `src/audio/musicEngine.web.ts`
