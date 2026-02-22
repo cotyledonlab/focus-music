@@ -4,9 +4,19 @@ import WebRenderer from "@elemaudio/web-renderer";
 
 import { MODE_CONFIGS, type FocusMode } from "../constants/modes";
 
-import { buildSongComposition, describeSongKey, midiToHz } from "./composition";
-import { getInstrumentationProfile, getMixProfile, getWebDrumKitProfile, getWebTimbreProfile } from "./profiles";
+import { createArrangementState } from "./arrangement";
+import { describeSongKey, midiToHz } from "./composition";
+import {
+  getMixProfile,
+  getWebDrumKitProfile,
+  getWebTimbreProfile,
+  type InstrumentationProfile,
+  type MixProfile,
+  type WebDrumKitProfile,
+  type WebTimbreProfile
+} from "./profiles";
 import { createSongPreset, type SongPreset } from "./song";
+import type { SongComposition } from "./composition";
 import type { EngineStartOptions, IGenerativeMusicEngine } from "./types";
 
 type ConstRef = {
@@ -27,6 +37,200 @@ const createConstRef = (core: WebRenderer, key: string, value: number): ConstRef
   const [node, set] = core.createRef("const", { key, value }, []) as [NodeRepr_t, (props: { value: number }) => Promise<unknown>];
 
   return { node, set };
+};
+
+type WebRenderContext = {
+  cfg: (typeof MODE_CONFIGS)[FocusMode];
+  song: SongPreset;
+  timbre: WebTimbreProfile;
+  drums: WebDrumKitProfile;
+  instrumentation: InstrumentationProfile;
+  mixProfile: MixProfile;
+  patterns: SongComposition;
+  reset: number;
+  root: NodeRepr_t;
+  warmth: NodeRepr_t;
+  energy: NodeRepr_t;
+  carrier: NodeRepr_t;
+  beat: NodeRepr_t;
+};
+
+type TonalLayers = {
+  bed: NodeRepr_t;
+  leftCarrier: NodeRepr_t;
+  rightCarrier: NodeRepr_t;
+  riff: NodeRepr_t;
+  riffEnv: NodeRepr_t;
+  pulseEnv: NodeRepr_t;
+};
+
+type DrumLayers = {
+  leftDrums: NodeRepr_t;
+  rightDrums: NodeRepr_t;
+  kickEnv: NodeRepr_t;
+  snareEnv: NodeRepr_t;
+};
+
+const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
+  const { cfg, song, timbre, instrumentation, patterns, reset, root, warmth, energy, carrier, beat } = ctx;
+
+  const chordStep = el.train((cfg.pulseBpm / 60) * song.tempoScale / 8 + 0.002);
+  const harmonicMotion = el.seq({ key: "harmonic-seq", seq: patterns.chordRatioSeq, hold: true }, chordStep, reset);
+
+  const padStep = el.train((cfg.pulseBpm / 60) * song.tempoScale / 4 + 0.002);
+  const drones = patterns.padRatioSeqs.map((padSeq, i) => {
+    const padRatio = el.seq({ key: `pad-ratio-${i}`, seq: padSeq, hold: true }, padStep, reset);
+    const drift = el.add(1, el.mul(0.004 + i * 0.002, el.cycle(0.008 + i * 0.004)));
+    const freq = el.mul(root, padRatio, drift);
+
+    const sine = el.cycle(freq);
+    const saw = el.blepsaw(el.mul(freq, 1.001 + i * 0.001));
+    const square = el.square(el.mul(freq, 0.5));
+    const fundamentalMix = Math.max(0.2, 1 - timbre.droneSawMix - timbre.droneSquareMix);
+    const osc = el.add(el.mul(fundamentalMix, sine), el.mul(timbre.droneSawMix, saw), el.mul(timbre.droneSquareMix, square));
+
+    const cutoff = el.add(timbre.droneCutoffBase, el.mul(timbre.droneCutoffMove, song.brightness), el.mul(1200, energy), el.mul(620, warmth));
+    const filtered = el.lowpass(cutoff, 0.74, osc);
+    const layerOn = i < instrumentation.padVoices ? 1 : 0;
+    return el.mul(layerOn, 0.09 + cfg.warmth * 0.03 - i * 0.01, el.tanh(el.mul(1 + timbre.droneDrive, filtered)));
+  });
+
+  const bassStep = el.train(patterns.pulseRate / 2 + 0.001);
+  const bassRatio = el.seq({ key: "bass-ratio", seq: patterns.bassRatioSeq, hold: true }, bassStep, reset);
+  const bassGate = el.seq({ key: "bass-gate", seq: patterns.pulseGateSeq, hold: true }, bassStep, reset);
+  const bassEnv = el.adsr(0.002, 0.12, 0.35, 0.16, bassGate);
+  const bassFreq = el.mul(root, bassRatio);
+  const bassOsc =
+    instrumentation.bassModel === "sub"
+      ? el.cycle(bassFreq)
+      : instrumentation.bassModel === "pluck"
+        ? el.bandpass(220 + song.brightness * 260, 0.76, el.add(el.mul(0.68, el.blepsaw(bassFreq)), el.mul(0.32, el.square(el.mul(bassFreq, 2)))))
+        : el.lowpass(210 + song.brightness * 140, 0.72, el.blepsaw(el.mul(bassFreq, 1.01)));
+  const bass = el.mul(instrumentation.bedLevel * (0.058 + song.drumDensity * 0.02), bassEnv, bassOsc);
+
+  const pulseTrig = el.train(patterns.pulseRate);
+  const pulseGate = el.seq({ key: "pulse-gate", seq: patterns.pulseGateSeq, hold: true }, pulseTrig, reset);
+  const pulseRatio = el.seq({ key: "pulse-ratio", seq: patterns.pulseRatioSeq, hold: true }, pulseTrig, reset);
+  const pulseAccent = el.seq({ key: "pulse-accent", seq: patterns.pulseAccentSeq, hold: true }, pulseTrig, reset);
+  const pulseEnv = el.adsr(0.002, 0.11, 0, 0.17 + cfg.warmth * 0.2, pulseGate);
+  const pulseFreq = el.mul(root, pulseRatio);
+  const pulseOsc =
+    instrumentation.pulseModel === "noise"
+      ? el.bandpass(520 + cfg.energy * 740 + song.brightness * 420, 0.8, el.noise({ key: "pulse-noise", seed: patterns.seed + 9 }))
+      : instrumentation.pulseModel === "fm"
+        ? el.cycle(el.add(pulseFreq, el.mul(0.38, pulseFreq, el.cycle(el.mul(pulseFreq, 0.5)))))
+        : el.add(el.mul(0.72, el.cycle(pulseFreq)), el.mul(0.28, el.square(el.mul(pulseFreq, 2.01))));
+  const pulseTone = el.mul(
+    instrumentation.bedLevel * (0.045 + cfg.energy * 0.035 + song.drumDensity * 0.026),
+    pulseAccent,
+    pulseEnv,
+    el.lowpass(250 + cfg.energy * 360 + song.brightness * 260, 0.84, pulseOsc)
+  );
+
+  const air = el.mul(
+    timbre.airGain * instrumentation.airLevel * (0.007 + cfg.warmth * 0.014),
+    el.lowpass(el.add(1400, el.mul(1900, song.brightness), el.mul(800, warmth)), 0.68, el.pinknoise({ key: "air-noise", seed: patterns.seed + 1 }))
+  );
+
+  const shimmer = el.mul(
+    timbre.shimmerGain * instrumentation.shimmerLevel * (0.008 + cfg.energy * 0.01 + song.brightness * 0.02),
+    el.cycle(el.mul(root, 0.5, harmonicMotion, el.add(1, el.mul(0.012, el.cycle(0.024)))))
+  );
+
+  const riffTrig = el.train(patterns.riffRate);
+  const riffGate = el.seq({ key: "riff-gate", seq: patterns.riffGateSeq, hold: true }, riffTrig, reset);
+  const riffRatio = el.seq({ key: "riff-ratio", seq: patterns.riffRatioSeq, hold: true }, riffTrig, reset);
+  const riffAccent = el.seq({ key: "riff-accent", seq: patterns.riffAccentSeq, hold: true }, riffTrig, reset);
+  const riffEnv = el.adsr(0.0015, 0.08, 0.1, 0.12 + song.hookDensity * 0.16, riffGate);
+  const riffFreq = el.mul(root, song.riffRegister, riffRatio, el.add(1, el.mul(song.swing * 0.55, el.cycle(0.16))));
+  const riffSaw = el.blepsaw(riffFreq);
+  const riffSquare = el.square(el.mul(riffFreq, 1.004));
+  const riffSine = el.cycle(el.mul(riffFreq, 2.01));
+  const riffOsc =
+    instrumentation.riffModel === "square"
+      ? el.add(el.mul(0.68, riffSquare), el.mul(0.32, riffSine))
+      : instrumentation.riffModel === "sine"
+        ? el.add(el.mul(0.76, riffSine), el.mul(0.24, riffSaw))
+        : (() => {
+            const riffFundamental = Math.max(0.1, 1 - timbre.riffSawMix - timbre.riffSquareMix);
+            return el.add(el.mul(timbre.riffSawMix, riffSaw), el.mul(timbre.riffSquareMix, riffSquare), el.mul(riffFundamental, riffSine));
+          })();
+  const riffFilter = el.lowpass(el.add(timbre.riffCutoffBase, el.mul(timbre.riffCutoffMove, song.brightness), el.mul(700, energy)), 0.76, riffOsc);
+  const riffPhase = el.allpass(el.add(520, el.mul(440, el.cycle(0.08))), 0.66, riffFilter);
+  const riff = instrumentation.riffEnabled
+    ? el.mul(0.05 + song.hookDensity * 0.11, riffAccent, riffEnv, el.tanh(el.mul(1 + timbre.riffDrive, riffPhase)))
+    : el.mul(0, riffEnv);
+
+  const leftCarrierFreq = el.sub(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.013)))), el.div(beat, 2));
+  const rightCarrierFreq = el.add(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.017)))), el.div(beat, 2));
+  const leftCarrier = el.mul(instrumentation.carrierLevel, el.cycle(leftCarrierFreq));
+  const rightCarrier = el.mul(instrumentation.carrierLevel, el.cycle(rightCarrierFreq));
+
+  const bedRaw = el.add(...drones, bass, pulseTone, air, shimmer, riff);
+  const bed = el.highpass(108 + song.subTrim * 120, 0.72, el.mul(instrumentation.bedLevel, bedRaw));
+
+  return { bed, leftCarrier, rightCarrier, riff, riffEnv, pulseEnv };
+};
+
+const buildDrumLayers = (ctx: WebRenderContext): DrumLayers => {
+  const { cfg, song, drums, instrumentation, patterns, reset, energy } = ctx;
+
+  const drumStep = el.train(patterns.drumRate);
+
+  const kickGate = el.seq({ key: "kick-seq", seq: patterns.kickSeq, hold: true }, drumStep, reset);
+  const kickEnv = el.adsr(0.001, 0.06, 0, drums.kickDecay + cfg.warmth * 0.08, kickGate);
+  const kickPitch = el.add(drums.kickBase, el.mul(drums.kickSweep, el.mul(kickEnv, kickEnv)));
+  const kickBody = el.cycle(kickPitch);
+  const kickClick = el.highpass(2200, 0.72, el.noise({ key: "kick-click", seed: patterns.seed + 11 }));
+  const kick = el.mul(0.25 + song.drumDensity * 0.31, el.tanh(el.add(el.mul(kickEnv, kickBody), el.mul(drums.kickClick, kickEnv, kickClick))));
+
+  const snareGate = el.seq({ key: "snare-seq", seq: patterns.snareSeq, hold: true }, drumStep, reset);
+  const snareEnv = el.adsr(0.001, 0.05, 0, 0.13 + cfg.warmth * 0.08, snareGate);
+  const snareNoise = el.bandpass(1800 + cfg.energy * 1300 + song.brightness * 1000, 0.86, el.noise({ key: "snare-noise", seed: patterns.seed + 17 }));
+  const snareBody = el.cycle(170 + cfg.energy * 45);
+  const snare = el.mul(
+    0.1 + song.drumDensity * 0.14,
+    el.tanh(el.add(el.mul(snareEnv, snareNoise, drums.snareNoise), el.mul(drums.snareBody, snareEnv, snareBody)))
+  );
+
+  const hatGate = el.seq({ key: "hat-seq", seq: patterns.hatSeq, hold: true }, drumStep, reset);
+  const hatEnv = el.adsr(0.0008, 0.01, 0, 0.035, hatGate);
+  const hatNoise = el.highpass(5000 + song.brightness * 2600, 0.78, el.noise({ key: "hat-noise", seed: patterns.seed + 23 }));
+  const hatMetal = el.square(6100 + cfg.energy * 1200 + song.brightness * 1100);
+  const hats = el.mul(0.07 + song.drumDensity * 0.08, hatEnv, el.tanh(el.add(el.mul(drums.hatNoise, hatNoise), el.mul(drums.hatMetal, hatMetal))));
+
+  const openHatGate = el.seq({ key: "openh-seq", seq: patterns.openHatSeq, hold: true }, drumStep, reset);
+  const openHatEnv = el.adsr(0.001, 0.02, 0, 0.14 + cfg.warmth * 0.12, openHatGate);
+  const openHat = el.mul(
+    instrumentation.openHatOn ? 1 : 0,
+    0.055 + song.drumDensity * 0.06,
+    openHatEnv,
+    el.highpass(3900 + song.brightness * 1900, 0.74, el.pinknoise({ key: "openh-noise", seed: patterns.seed + 29 }))
+  );
+
+  const clapGate = el.seq({ key: "clap-seq", seq: patterns.clapSeq, hold: true }, drumStep, reset);
+  const clapEnv = el.adsr(0.001, 0.02, 0, 0.11, clapGate);
+  const clap = el.mul(
+    instrumentation.clapOn ? 1 : 0,
+    0.05 + song.drumDensity * 0.07,
+    clapEnv,
+    el.bandpass(1400 + cfg.energy * 700 + song.brightness * 1000, 0.9, el.mul(drums.clapNoise, el.noise({ key: "clap-noise", seed: patterns.seed + 31 })))
+  );
+
+  const rimGate = el.seq({ key: "rim-seq", seq: patterns.rimSeq, hold: true }, drumStep, reset);
+  const rimEnv = el.adsr(0.001, 0.008, 0, 0.04, rimGate);
+  const rim = el.mul(instrumentation.rimOn ? 1 : 0, 0.025 + song.drumDensity * 0.035, rimEnv, el.cycle(1020 + cfg.energy * 320));
+
+  const drumBus = el.add(kick, snare, hats, openHat, clap, rim);
+  const drumShaped = el.tanh(
+    el.mul(1 + drums.drive, el.lowpass(10800 + song.brightness * 2100, 0.74, el.highpass(58 + song.subTrim * 36, 0.72, drumBus)))
+  );
+  const drumPan = el.mul(0.22, el.cycle(0.09));
+  const drumPresence = (0.2 + song.drumDensity * 0.58) * instrumentation.drumLevel;
+  const leftDrums = el.mul(drumPresence, el.add(1, drumPan), drumShaped);
+  const rightDrums = el.mul(drumPresence, el.sub(1, drumPan), drumShaped);
+
+  return { leftDrums, rightDrums, kickEnv, snareEnv };
 };
 
 export class GenerativeMusicEngine implements IGenerativeMusicEngine {
@@ -258,13 +462,14 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       return;
     }
 
-    const cfg = MODE_CONFIGS[this.mode];
-    const song = this.song;
-    const timbre = getWebTimbreProfile(song.timbre);
-    const drums = getWebDrumKitProfile(song.drumKit);
-    const instrumentation = getInstrumentationProfile(song);
-    const mixProfile = getMixProfile(song);
-    const patterns = buildSongComposition(this.mode, song, this.evolveTick, cfg.pulseBpm);
+    const arrangement = createArrangementState({
+      mode: this.mode,
+      song: this.song,
+      evolveTick: this.evolveTick,
+      resolveTimbre: (song) => getWebTimbreProfile(song.timbre),
+      resolveDrums: (song) => getWebDrumKitProfile(song.drumKit)
+    });
+    const { cfg, song, timbre, drums, instrumentation, mix: mixProfile, patterns } = arrangement;
     this.evolveTick += 1;
 
     const reset = 0;
@@ -275,204 +480,39 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const root = el.smooth(0.999, this.refs.root.node);
     const warmth = el.smooth(0.998, this.refs.warmth.node);
     const energy = el.smooth(0.998, this.refs.energy.node);
-
-    const chordStep = el.train((cfg.pulseBpm / 60) * song.tempoScale / 8 + 0.002);
-    const harmonicMotion = el.seq({ key: "harmonic-seq", seq: patterns.chordRatioSeq, hold: true }, chordStep, reset);
-
-    const padStep = el.train((cfg.pulseBpm / 60) * song.tempoScale / 4 + 0.002);
-    const drones = patterns.padRatioSeqs.map((padSeq, i) => {
-      const padRatio = el.seq({ key: `pad-ratio-${i}`, seq: padSeq, hold: true }, padStep, reset);
-      const drift = el.add(1, el.mul(0.004 + i * 0.002, el.cycle(0.008 + i * 0.004)));
-      const freq = el.mul(root, padRatio, drift);
-
-      const sine = el.cycle(freq);
-      const saw = el.blepsaw(el.mul(freq, 1.001 + i * 0.001));
-      const square = el.square(el.mul(freq, 0.5));
-      const fundamentalMix = Math.max(0.2, 1 - timbre.droneSawMix - timbre.droneSquareMix);
-      const osc = el.add(el.mul(fundamentalMix, sine), el.mul(timbre.droneSawMix, saw), el.mul(timbre.droneSquareMix, square));
-
-      const cutoff = el.add(
-        timbre.droneCutoffBase,
-        el.mul(timbre.droneCutoffMove, song.brightness),
-        el.mul(1200, energy),
-        el.mul(620, warmth)
-      );
-      const filtered = el.lowpass(cutoff, 0.74, osc);
-      const layerOn = i < instrumentation.padVoices ? 1 : 0;
-      return el.mul(layerOn, 0.09 + cfg.warmth * 0.03 - i * 0.01, el.tanh(el.mul(1 + timbre.droneDrive, filtered)));
-    });
-
-    const bassStep = el.train(patterns.pulseRate / 2 + 0.001);
-    const bassRatio = el.seq({ key: "bass-ratio", seq: patterns.bassRatioSeq, hold: true }, bassStep, reset);
-    const bassGate = el.seq({ key: "bass-gate", seq: patterns.pulseGateSeq, hold: true }, bassStep, reset);
-    const bassEnv = el.adsr(0.002, 0.12, 0.35, 0.16, bassGate);
-    const bassFreq = el.mul(root, bassRatio);
-    const bassOsc =
-      instrumentation.bassModel === "sub"
-        ? el.cycle(bassFreq)
-        : instrumentation.bassModel === "pluck"
-          ? el.bandpass(220 + song.brightness * 260, 0.76, el.add(el.mul(0.68, el.blepsaw(bassFreq)), el.mul(0.32, el.square(el.mul(bassFreq, 2)))))
-          : el.lowpass(210 + song.brightness * 140, 0.72, el.blepsaw(el.mul(bassFreq, 1.01)));
-    const bass = el.mul(instrumentation.bedLevel * (0.058 + song.drumDensity * 0.02), bassEnv, bassOsc);
-
-    const pulseTrig = el.train(patterns.pulseRate);
-    const pulseGate = el.seq({ key: "pulse-gate", seq: patterns.pulseGateSeq, hold: true }, pulseTrig, reset);
-    const pulseRatio = el.seq({ key: "pulse-ratio", seq: patterns.pulseRatioSeq, hold: true }, pulseTrig, reset);
-    const pulseAccent = el.seq({ key: "pulse-accent", seq: patterns.pulseAccentSeq, hold: true }, pulseTrig, reset);
-
-    const pulseEnv = el.adsr(0.002, 0.11, 0, 0.17 + cfg.warmth * 0.2, pulseGate);
-    const pulseFreq = el.mul(root, pulseRatio);
-    const pulseOsc =
-      instrumentation.pulseModel === "noise"
-        ? el.bandpass(520 + cfg.energy * 740 + song.brightness * 420, 0.8, el.noise({ key: "pulse-noise", seed: patterns.seed + 9 }))
-        : instrumentation.pulseModel === "fm"
-          ? el.cycle(el.add(pulseFreq, el.mul(0.38, pulseFreq, el.cycle(el.mul(pulseFreq, 0.5)))))
-          : el.add(el.mul(0.72, el.cycle(pulseFreq)), el.mul(0.28, el.square(el.mul(pulseFreq, 2.01))));
-    const pulseTone = el.mul(
-      instrumentation.bedLevel * (0.045 + cfg.energy * 0.035 + song.drumDensity * 0.026),
-      pulseAccent,
-      pulseEnv,
-      el.lowpass(250 + cfg.energy * 360 + song.brightness * 260, 0.84, pulseOsc)
-    );
-
-    const air = el.mul(
-      timbre.airGain * instrumentation.airLevel * (0.007 + cfg.warmth * 0.014),
-      el.lowpass(
-        el.add(1400, el.mul(1900, song.brightness), el.mul(800, warmth)),
-        0.68,
-        el.pinknoise({ key: "air-noise", seed: patterns.seed + 1 })
-      )
-    );
-
-    const shimmer = el.mul(
-      timbre.shimmerGain * instrumentation.shimmerLevel * (0.008 + cfg.energy * 0.01 + song.brightness * 0.02),
-      el.cycle(el.mul(root, 0.5, harmonicMotion, el.add(1, el.mul(0.012, el.cycle(0.024)))))
-    );
-
-    const drumStep = el.train(patterns.drumRate);
-
-    const kickGate = el.seq({ key: "kick-seq", seq: patterns.kickSeq, hold: true }, drumStep, reset);
-    const kickEnv = el.adsr(0.001, 0.06, 0, drums.kickDecay + cfg.warmth * 0.08, kickGate);
-    const kickPitch = el.add(drums.kickBase, el.mul(drums.kickSweep, el.mul(kickEnv, kickEnv)));
-    const kickBody = el.cycle(kickPitch);
-    const kickClick = el.highpass(2200, 0.72, el.noise({ key: "kick-click", seed: patterns.seed + 11 }));
-    const kick = el.mul(
-      0.25 + song.drumDensity * 0.31,
-      el.tanh(el.add(el.mul(kickEnv, kickBody), el.mul(drums.kickClick, kickEnv, kickClick)))
-    );
-
-    const snareGate = el.seq({ key: "snare-seq", seq: patterns.snareSeq, hold: true }, drumStep, reset);
-    const snareEnv = el.adsr(0.001, 0.05, 0, 0.13 + cfg.warmth * 0.08, snareGate);
-    const snareNoise = el.bandpass(
-      1800 + cfg.energy * 1300 + song.brightness * 1000,
-      0.86,
-      el.noise({ key: "snare-noise", seed: patterns.seed + 17 })
-    );
-    const snareBody = el.cycle(170 + cfg.energy * 45);
-    const snare = el.mul(
-      0.1 + song.drumDensity * 0.14,
-      el.tanh(el.add(el.mul(snareEnv, snareNoise, drums.snareNoise), el.mul(drums.snareBody, snareEnv, snareBody)))
-    );
-
-    const hatGate = el.seq({ key: "hat-seq", seq: patterns.hatSeq, hold: true }, drumStep, reset);
-    const hatEnv = el.adsr(0.0008, 0.01, 0, 0.035, hatGate);
-    const hatNoise = el.highpass(5000 + song.brightness * 2600, 0.78, el.noise({ key: "hat-noise", seed: patterns.seed + 23 }));
-    const hatMetal = el.square(6100 + cfg.energy * 1200 + song.brightness * 1100);
-    const hats = el.mul(
-      0.07 + song.drumDensity * 0.08,
-      hatEnv,
-      el.tanh(el.add(el.mul(drums.hatNoise, hatNoise), el.mul(drums.hatMetal, hatMetal)))
-    );
-
-    const openHatGate = el.seq({ key: "openh-seq", seq: patterns.openHatSeq, hold: true }, drumStep, reset);
-    const openHatEnv = el.adsr(0.001, 0.02, 0, 0.14 + cfg.warmth * 0.12, openHatGate);
-    const openHat = el.mul(
-      instrumentation.openHatOn ? 1 : 0,
-      0.055 + song.drumDensity * 0.06,
-      openHatEnv,
-      el.highpass(3900 + song.brightness * 1900, 0.74, el.pinknoise({ key: "openh-noise", seed: patterns.seed + 29 }))
-    );
-
-    const clapGate = el.seq({ key: "clap-seq", seq: patterns.clapSeq, hold: true }, drumStep, reset);
-    const clapEnv = el.adsr(0.001, 0.02, 0, 0.11, clapGate);
-    const clap = el.mul(
-      instrumentation.clapOn ? 1 : 0,
-      0.05 + song.drumDensity * 0.07,
-      clapEnv,
-      el.bandpass(1400 + cfg.energy * 700 + song.brightness * 1000, 0.9, el.mul(drums.clapNoise, el.noise({ key: "clap-noise", seed: patterns.seed + 31 })))
-    );
-
-    const rimGate = el.seq({ key: "rim-seq", seq: patterns.rimSeq, hold: true }, drumStep, reset);
-    const rimEnv = el.adsr(0.001, 0.008, 0, 0.04, rimGate);
-    const rim = el.mul(instrumentation.rimOn ? 1 : 0, 0.025 + song.drumDensity * 0.035, rimEnv, el.cycle(1020 + cfg.energy * 320));
-
-    const drumBus = el.add(kick, snare, hats, openHat, clap, rim);
-    const drumShaped = el.tanh(
-      el.mul(
-        1 + drums.drive,
-        el.lowpass(10800 + song.brightness * 2100, 0.74, el.highpass(58 + song.subTrim * 36, 0.72, drumBus))
-      )
-    );
-
-    const riffTrig = el.train(patterns.riffRate);
-    const riffGate = el.seq({ key: "riff-gate", seq: patterns.riffGateSeq, hold: true }, riffTrig, reset);
-    const riffRatio = el.seq({ key: "riff-ratio", seq: patterns.riffRatioSeq, hold: true }, riffTrig, reset);
-    const riffAccent = el.seq({ key: "riff-accent", seq: patterns.riffAccentSeq, hold: true }, riffTrig, reset);
-    const riffEnv = el.adsr(0.0015, 0.08, 0.1, 0.12 + song.hookDensity * 0.16, riffGate);
-
-    const riffFreq = el.mul(root, song.riffRegister, riffRatio, el.add(1, el.mul(song.swing * 0.55, el.cycle(0.16))));
-    const riffSaw = el.blepsaw(riffFreq);
-    const riffSquare = el.square(el.mul(riffFreq, 1.004));
-    const riffSine = el.cycle(el.mul(riffFreq, 2.01));
-    const riffOsc =
-      instrumentation.riffModel === "square"
-        ? el.add(el.mul(0.68, riffSquare), el.mul(0.32, riffSine))
-        : instrumentation.riffModel === "sine"
-          ? el.add(el.mul(0.76, riffSine), el.mul(0.24, riffSaw))
-          : (() => {
-              const riffFundamental = Math.max(0.1, 1 - timbre.riffSawMix - timbre.riffSquareMix);
-              return el.add(el.mul(timbre.riffSawMix, riffSaw), el.mul(timbre.riffSquareMix, riffSquare), el.mul(riffFundamental, riffSine));
-            })();
-    const riffFilter = el.lowpass(
-      el.add(timbre.riffCutoffBase, el.mul(timbre.riffCutoffMove, song.brightness), el.mul(700, energy)),
-      0.76,
-      riffOsc
-    );
-    const riffPhase = el.allpass(el.add(520, el.mul(440, el.cycle(0.08))), 0.66, riffFilter);
-    const riff = instrumentation.riffEnabled
-      ? el.mul(0.05 + song.hookDensity * 0.11, riffAccent, riffEnv, el.tanh(el.mul(1 + timbre.riffDrive, riffPhase)))
-      : 0;
-
-    const leftCarrierFreq = el.sub(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.013)))), el.div(beat, 2));
-    const rightCarrierFreq = el.add(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.017)))), el.div(beat, 2));
-
-    const leftCarrier = el.mul(instrumentation.carrierLevel, el.cycle(leftCarrierFreq));
-    const rightCarrier = el.mul(instrumentation.carrierLevel, el.cycle(rightCarrierFreq));
-
-    const bedRaw = el.add(...drones, bass, pulseTone, air, shimmer, riff);
-    const bed = el.highpass(108 + song.subTrim * 120, 0.72, el.mul(instrumentation.bedLevel, bedRaw));
+    const context: WebRenderContext = {
+      cfg,
+      song,
+      timbre,
+      drums,
+      instrumentation,
+      mixProfile,
+      patterns,
+      reset,
+      root,
+      warmth,
+      energy,
+      carrier,
+      beat
+    };
+    const tonal = buildTonalLayers(context);
+    const drum = buildDrumLayers(context);
 
     const stereoDrift = el.mul(0.01 + timbre.stereoWidth * mixProfile.stereoWidth * 0.014, el.cycle(0.006));
     const duckAmount = 0.18 + song.drumDensity * 0.17;
-    const duck = el.sub(1, el.mul(duckAmount, kickEnv));
-
-    const leftBed = el.mul(duck, el.add(1, stereoDrift), bed);
-    const rightBed = el.mul(duck, el.sub(1, stereoDrift), bed);
-
-    const drumPan = el.mul(0.22, el.cycle(0.09));
-    const drumPresence = (0.2 + song.drumDensity * 0.58) * instrumentation.drumLevel;
-    const leftDrums = el.mul(drumPresence, el.add(1, drumPan), drumShaped);
-    const rightDrums = el.mul(drumPresence, el.sub(1, drumPan), drumShaped);
+    const duck = el.sub(1, el.mul(duckAmount, drum.kickEnv));
+    const leftBed = el.mul(duck, el.add(1, stereoDrift), tonal.bed);
+    const rightBed = el.mul(duck, el.sub(1, stereoDrift), tonal.bed);
 
     const spaceSendLeft = el.add(
       el.mul(mixProfile.reverbBedSend, leftBed),
-      el.mul(mixProfile.reverbDrumSend, leftDrums),
-      el.mul(mixProfile.reverbRiffSend, riff)
+      el.mul(mixProfile.reverbDrumSend, drum.leftDrums),
+      el.mul(mixProfile.reverbRiffSend, tonal.riff)
     );
     const spaceSendRight = el.add(
       el.mul(mixProfile.reverbBedSend, rightBed),
-      el.mul(mixProfile.reverbDrumSend, rightDrums),
-      el.mul(mixProfile.reverbRiffSend, riff)
+      el.mul(mixProfile.reverbDrumSend, drum.rightDrums),
+      el.mul(mixProfile.reverbRiffSend, tonal.riff)
     );
     const spaceL1 = el.allpass(el.add(420, el.mul(300, el.cycle(0.037))), 0.72, spaceSendLeft);
     const spaceR1 = el.allpass(el.add(460, el.mul(320, el.cycle(0.031))), 0.72, spaceSendRight);
@@ -481,7 +521,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const spaceLeft = el.lowpass(5200 + song.brightness * 1800, 0.68, spaceL2);
     const spaceRight = el.lowpass(5200 + song.brightness * 1800, 0.68, spaceR2);
 
-    const echoInput = el.highpass(420, 0.72, el.add(leftBed, rightBed, el.mul(0.6, riff)));
+    const echoInput = el.highpass(420, 0.72, el.add(leftBed, rightBed, el.mul(0.6, tonal.riff)));
     const echoLeft = el.allpass(
       el.add(1240, el.mul(760, el.cycle(0.017))),
       Math.min(0.86, 0.52 + mixProfile.echoFeedback * 0.36),
@@ -493,12 +533,15 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       el.mul(mixProfile.echoSend, echoInput)
     );
 
-    const preLeft = el.add(leftBed, leftCarrier, leftDrums, spaceLeft, echoLeft);
-    const preRight = el.add(rightBed, rightCarrier, rightDrums, spaceRight, echoRight);
+    const preLeft = el.add(leftBed, tonal.leftCarrier, drum.leftDrums, spaceLeft, echoLeft);
+    const preRight = el.add(rightBed, tonal.rightCarrier, drum.rightDrums, spaceRight, echoRight);
 
-    const riffEnvForGlue = instrumentation.riffEnabled ? riffEnv : 0;
+    const riffEnvForGlue = instrumentation.riffEnabled ? tonal.riffEnv : 0;
     const glueKey = el.tanh(
-      el.mul(2.6, el.add(el.mul(0.58, kickEnv), el.mul(0.34, snareEnv), el.mul(0.22, pulseEnv), el.mul(0.2, riffEnvForGlue)))
+      el.mul(
+        2.6,
+        el.add(el.mul(0.58, drum.kickEnv), el.mul(0.34, drum.snareEnv), el.mul(0.22, tonal.pulseEnv), el.mul(0.2, riffEnvForGlue))
+      )
     );
     const glueDepth =
       (mixProfile.glueAmount * (mixProfile.compRatio / (mixProfile.compRatio + 1))) / Math.max(0.25, mixProfile.compThreshold);
