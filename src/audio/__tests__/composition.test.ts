@@ -61,6 +61,14 @@ describe("buildSongComposition", () => {
     expect(composition.riffRatioSeq).toHaveLength(32);
     expect(composition.riffGateSeq).toHaveLength(32);
     expect(composition.riffAccentSeq).toHaveLength(32);
+    expect(composition.sceneBedSeq).toHaveLength(8);
+    expect(composition.sceneBassSeq).toHaveLength(8);
+    expect(composition.scenePulseSeq).toHaveLength(8);
+    expect(composition.sceneRiffSeq).toHaveLength(8);
+    expect(composition.sceneDrumSeq).toHaveLength(8);
+    expect(composition.sceneAirSeq).toHaveLength(8);
+    expect(composition.sceneShimmerSeq).toHaveLength(8);
+    expect(composition.sceneWidthSeq).toHaveLength(8);
 
     [0, 8].forEach((index) => expect(composition.kickSeq[index]).toBe(1));
     [4, 12].forEach((index) => expect(composition.snareSeq[index]).toBe(1));
@@ -74,6 +82,11 @@ describe("buildSongComposition", () => {
     expect(composition.pulseRate).toBeGreaterThan(0);
     expect(composition.drumRate).toBeGreaterThan(0);
     expect(composition.riffRate).toBeGreaterThan(0);
+    expect(composition.arrangementRate).toBeGreaterThan(0);
+
+    composition.sceneBedSeq.forEach((value) => expect(value).toBeGreaterThan(0));
+    composition.sceneDrumSeq.forEach((value) => expect(value).toBeGreaterThan(0));
+    composition.sceneWidthSeq.forEach((value) => expect(value).toBeGreaterThan(0.5));
   });
 
   it("keeps generated ratios inside the selected scale family", () => {

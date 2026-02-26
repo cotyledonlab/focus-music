@@ -28,6 +28,21 @@ type PreparedSound = {
 const TWO_PI = Math.PI * 2;
 
 const fract = (value: number) => value - Math.floor(value);
+const smoothstep = (value: number) => {
+  const t = Math.max(0, Math.min(1, value));
+  return t * t * (3 - 2 * t);
+};
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const sceneValueAt = (seq: number[], step: number, phase: number, fallback = 1) => {
+  const length = seq.length;
+  if (!length) {
+    return fallback;
+  }
+
+  const current = seq[((step % length) + length) % length] ?? fallback;
+  const next = seq[(((step + 1) % length) + length) % length] ?? current;
+  return lerp(current, next, smoothstep(phase));
+};
 
 const saw = (frequency: number, time: number, phase = 0) => 2 * fract(frequency * time + phase / TWO_PI) - 1;
 
@@ -408,6 +423,17 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
       const chordIndex = Math.floor(t * chordRate) % composition.chordRatioSeq.length;
       const harmonicRatio = composition.chordRatioSeq[chordIndex] ?? 1;
+      const sceneStepFloat = t * composition.arrangementRate;
+      const sceneStep = Math.floor(sceneStepFloat);
+      const scenePhase = fract(sceneStepFloat);
+      const sceneBed = sceneValueAt(composition.sceneBedSeq, sceneStep, scenePhase);
+      const sceneBass = sceneValueAt(composition.sceneBassSeq, sceneStep, scenePhase);
+      const scenePulse = sceneValueAt(composition.scenePulseSeq, sceneStep, scenePhase);
+      const sceneRiff = sceneValueAt(composition.sceneRiffSeq, sceneStep, scenePhase);
+      const sceneDrum = sceneValueAt(composition.sceneDrumSeq, sceneStep, scenePhase);
+      const sceneAir = sceneValueAt(composition.sceneAirSeq, sceneStep, scenePhase);
+      const sceneShimmer = sceneValueAt(composition.sceneShimmerSeq, sceneStep, scenePhase);
+      const sceneWidth = sceneValueAt(composition.sceneWidthSeq, sceneStep, scenePhase);
 
       const padStep = Math.floor(t * padRate) % 16;
       const drone = renderPadFrame(frameContext, composition, padStep);
@@ -415,16 +441,22 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       const drumsFrame = renderDrumFrame(frameContext, composition);
       const riffFrame = renderRiffFrame(frameContext, composition);
 
-      const air = noise(i, segmentSeed + 5009) * timbre.airGain * instrumentation.airLevel * (0.006 + song.brightness * 0.012);
+      const air = noise(i, segmentSeed + 5009) * timbre.airGain * instrumentation.airLevel * sceneAir * (0.006 + song.brightness * 0.012);
       const shimmer =
-        Math.sin(TWO_PI * (rootHz * 4.02 + song.brightness * 240) * t + phase[0]) * timbre.shimmerGain * instrumentation.shimmerLevel * 0.004;
+        Math.sin(TWO_PI * (rootHz * 4.02 + song.brightness * 240) * t + phase[0]) * timbre.shimmerGain * instrumentation.shimmerLevel * sceneShimmer * 0.004;
 
       const duck = 1 - drumsFrame.kickEnv * (0.13 + song.drumDensity * 0.1);
-      const bedLeft = (drone.left + groove.bass + groove.pulse + riffFrame.riff + air + shimmer) * duck * instrumentation.bedLevel;
-      const bedRight = (drone.right + groove.bass + groove.pulse + riffFrame.riff + air + shimmer) * duck * instrumentation.bedLevel;
+      const bedLeft =
+        (drone.left * sceneBed + groove.bass * sceneBass + groove.pulse * scenePulse + riffFrame.riff * sceneRiff + air + shimmer) *
+        duck *
+        instrumentation.bedLevel;
+      const bedRight =
+        (drone.right * sceneBed + groove.bass * sceneBass + groove.pulse * scenePulse + riffFrame.riff * sceneRiff + air + shimmer) *
+        duck *
+        instrumentation.bedLevel;
       const drumBus = drumsFrame.drumBus;
-      const drumLeft = drumBus * (0.55 + song.drumDensity * 0.35) * 0.95 * instrumentation.drumLevel;
-      const drumRight = drumBus * (0.55 + song.drumDensity * 0.35) * 1.05 * instrumentation.drumLevel;
+      const drumLeft = drumBus * sceneDrum * (0.55 + song.drumDensity * 0.35) * 0.95 * instrumentation.drumLevel;
+      const drumRight = drumBus * sceneDrum * (0.55 + song.drumDensity * 0.35) * 1.05 * instrumentation.drumLevel;
 
       const spaceTapL1 = spaceBufferL1[spaceIdx1];
       const spaceTapR1 = spaceBufferR1[spaceIdx1];
@@ -474,7 +506,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       const gluedL = preLeft * glueGain;
       const gluedR = preRight * glueGain;
       const mid = (gluedL + gluedR) * 0.5;
-      const side = (gluedL - gluedR) * 0.5 * mixProfile.stereoWidth;
+      const side = (gluedL - gluedR) * 0.5 * mixProfile.stereoWidth * sceneWidth;
       const widenedL = mid + side;
       const widenedR = mid - side;
 

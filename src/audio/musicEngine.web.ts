@@ -53,6 +53,14 @@ type WebRenderContext = {
   energy: NodeRepr_t;
   carrier: NodeRepr_t;
   beat: NodeRepr_t;
+  sceneBed: NodeRepr_t;
+  sceneBass: NodeRepr_t;
+  scenePulse: NodeRepr_t;
+  sceneRiff: NodeRepr_t;
+  sceneDrum: NodeRepr_t;
+  sceneAir: NodeRepr_t;
+  sceneShimmer: NodeRepr_t;
+  sceneWidth: NodeRepr_t;
 };
 
 type TonalLayers = {
@@ -62,6 +70,7 @@ type TonalLayers = {
   riff: NodeRepr_t;
   riffEnv: NodeRepr_t;
   pulseEnv: NodeRepr_t;
+  sceneWidth: NodeRepr_t;
 };
 
 type DrumLayers = {
@@ -72,7 +81,7 @@ type DrumLayers = {
 };
 
 const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
-  const { cfg, song, timbre, instrumentation, patterns, reset, root, warmth, energy, carrier, beat } = ctx;
+  const { cfg, song, timbre, instrumentation, patterns, reset, root, warmth, energy, carrier, beat, sceneBed, sceneBass, scenePulse, sceneRiff, sceneAir, sceneShimmer, sceneWidth } = ctx;
 
   const chordStep = el.train((cfg.pulseBpm / 60) * song.tempoScale / 8 + 0.002);
   const harmonicMotion = el.seq({ key: "harmonic-seq", seq: patterns.chordRatioSeq, hold: true }, chordStep, reset);
@@ -92,7 +101,7 @@ const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
     const cutoff = el.add(timbre.droneCutoffBase, el.mul(timbre.droneCutoffMove, song.brightness), el.mul(1200, energy), el.mul(620, warmth));
     const filtered = el.lowpass(cutoff, 0.74, osc);
     const layerOn = i < instrumentation.padVoices ? 1 : 0;
-    return el.mul(layerOn, 0.09 + cfg.warmth * 0.03 - i * 0.01, el.tanh(el.mul(1 + timbre.droneDrive, filtered)));
+    return el.mul(layerOn, sceneBed, 0.09 + cfg.warmth * 0.03 - i * 0.01, el.tanh(el.mul(1 + timbre.droneDrive, filtered)));
   });
 
   const bassStep = el.train(patterns.pulseRate / 2 + 0.001);
@@ -106,7 +115,7 @@ const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
       : instrumentation.bassModel === "pluck"
         ? el.bandpass(220 + song.brightness * 260, 0.76, el.add(el.mul(0.68, el.blepsaw(bassFreq)), el.mul(0.32, el.square(el.mul(bassFreq, 2)))))
         : el.lowpass(210 + song.brightness * 140, 0.72, el.blepsaw(el.mul(bassFreq, 1.01)));
-  const bass = el.mul(instrumentation.bedLevel * (0.058 + song.drumDensity * 0.02), bassEnv, bassOsc);
+  const bass = el.mul(sceneBass, instrumentation.bedLevel * (0.058 + song.drumDensity * 0.02), bassEnv, bassOsc);
 
   const pulseTrig = el.train(patterns.pulseRate);
   const pulseGate = el.seq({ key: "pulse-gate", seq: patterns.pulseGateSeq, hold: true }, pulseTrig, reset);
@@ -121,6 +130,7 @@ const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
         ? el.cycle(el.add(pulseFreq, el.mul(0.38, pulseFreq, el.cycle(el.mul(pulseFreq, 0.5)))))
         : el.add(el.mul(0.72, el.cycle(pulseFreq)), el.mul(0.28, el.square(el.mul(pulseFreq, 2.01))));
   const pulseTone = el.mul(
+    scenePulse,
     instrumentation.bedLevel * (0.045 + cfg.energy * 0.035 + song.drumDensity * 0.026),
     pulseAccent,
     pulseEnv,
@@ -128,11 +138,13 @@ const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
   );
 
   const air = el.mul(
+    sceneAir,
     timbre.airGain * instrumentation.airLevel * (0.007 + cfg.warmth * 0.014),
     el.lowpass(el.add(1400, el.mul(1900, song.brightness), el.mul(800, warmth)), 0.68, el.pinknoise({ key: "air-noise", seed: patterns.seed + 1 }))
   );
 
   const shimmer = el.mul(
+    sceneShimmer,
     timbre.shimmerGain * instrumentation.shimmerLevel * (0.008 + cfg.energy * 0.01 + song.brightness * 0.02),
     el.cycle(el.mul(root, 0.5, harmonicMotion, el.add(1, el.mul(0.012, el.cycle(0.024)))))
   );
@@ -158,7 +170,7 @@ const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
   const riffFilter = el.lowpass(el.add(timbre.riffCutoffBase, el.mul(timbre.riffCutoffMove, song.brightness), el.mul(700, energy)), 0.76, riffOsc);
   const riffPhase = el.allpass(el.add(520, el.mul(440, el.cycle(0.08))), 0.66, riffFilter);
   const riff = instrumentation.riffEnabled
-    ? el.mul(0.05 + song.hookDensity * 0.11, riffAccent, riffEnv, el.tanh(el.mul(1 + timbre.riffDrive, riffPhase)))
+    ? el.mul(sceneRiff, 0.05 + song.hookDensity * 0.11, riffAccent, riffEnv, el.tanh(el.mul(1 + timbre.riffDrive, riffPhase)))
     : el.mul(0, riffEnv);
 
   const leftCarrierFreq = el.sub(el.mul(carrier, el.add(1, el.mul(0.004, el.cycle(0.013)))), el.div(beat, 2));
@@ -169,11 +181,11 @@ const buildTonalLayers = (ctx: WebRenderContext): TonalLayers => {
   const bedRaw = el.add(...drones, bass, pulseTone, air, shimmer, riff);
   const bed = el.highpass(108 + song.subTrim * 120, 0.72, el.mul(instrumentation.bedLevel, bedRaw));
 
-  return { bed, leftCarrier, rightCarrier, riff, riffEnv, pulseEnv };
+  return { bed, leftCarrier, rightCarrier, riff, riffEnv, pulseEnv, sceneWidth };
 };
 
 const buildDrumLayers = (ctx: WebRenderContext): DrumLayers => {
-  const { cfg, song, drums, instrumentation, patterns, reset, energy } = ctx;
+  const { cfg, song, drums, instrumentation, patterns, reset, energy, sceneDrum } = ctx;
 
   const drumStep = el.train(patterns.drumRate);
 
@@ -226,7 +238,7 @@ const buildDrumLayers = (ctx: WebRenderContext): DrumLayers => {
     el.mul(1 + drums.drive, el.lowpass(10800 + song.brightness * 2100, 0.74, el.highpass(58 + song.subTrim * 36, 0.72, drumBus)))
   );
   const drumPan = el.mul(0.22, el.cycle(0.09));
-  const drumPresence = (0.2 + song.drumDensity * 0.58) * instrumentation.drumLevel;
+  const drumPresence = el.mul(sceneDrum, (0.2 + song.drumDensity * 0.58) * instrumentation.drumLevel);
   const leftDrums = el.mul(drumPresence, el.add(1, drumPan), drumShaped);
   const rightDrums = el.mul(drumPresence, el.sub(1, drumPan), drumShaped);
 
@@ -480,6 +492,15 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const root = el.smooth(0.999, this.refs.root.node);
     const warmth = el.smooth(0.998, this.refs.warmth.node);
     const energy = el.smooth(0.998, this.refs.energy.node);
+    const arrangementStep = el.train(patterns.arrangementRate + 0.0005);
+    const sceneBed = el.smooth(0.92, el.seq({ key: "scene-bed", seq: patterns.sceneBedSeq, hold: true }, arrangementStep, reset));
+    const sceneBass = el.smooth(0.92, el.seq({ key: "scene-bass", seq: patterns.sceneBassSeq, hold: true }, arrangementStep, reset));
+    const scenePulse = el.smooth(0.92, el.seq({ key: "scene-pulse", seq: patterns.scenePulseSeq, hold: true }, arrangementStep, reset));
+    const sceneRiff = el.smooth(0.92, el.seq({ key: "scene-riff", seq: patterns.sceneRiffSeq, hold: true }, arrangementStep, reset));
+    const sceneDrum = el.smooth(0.92, el.seq({ key: "scene-drum", seq: patterns.sceneDrumSeq, hold: true }, arrangementStep, reset));
+    const sceneAir = el.smooth(0.92, el.seq({ key: "scene-air", seq: patterns.sceneAirSeq, hold: true }, arrangementStep, reset));
+    const sceneShimmer = el.smooth(0.92, el.seq({ key: "scene-shimmer", seq: patterns.sceneShimmerSeq, hold: true }, arrangementStep, reset));
+    const sceneWidth = el.smooth(0.96, el.seq({ key: "scene-width", seq: patterns.sceneWidthSeq, hold: true }, arrangementStep, reset));
     const context: WebRenderContext = {
       cfg,
       song,
@@ -493,12 +514,20 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       warmth,
       energy,
       carrier,
-      beat
+      beat,
+      sceneBed,
+      sceneBass,
+      scenePulse,
+      sceneRiff,
+      sceneDrum,
+      sceneAir,
+      sceneShimmer,
+      sceneWidth
     };
     const tonal = buildTonalLayers(context);
     const drum = buildDrumLayers(context);
 
-    const stereoDrift = el.mul(0.01 + timbre.stereoWidth * mixProfile.stereoWidth * 0.014, el.cycle(0.006));
+    const stereoDrift = el.mul(el.mul(0.01 + timbre.stereoWidth * mixProfile.stereoWidth * 0.014, tonal.sceneWidth), el.cycle(0.006));
     const duckAmount = 0.18 + song.drumDensity * 0.17;
     const duck = el.sub(1, el.mul(duckAmount, drum.kickEnv));
     const leftBed = el.mul(duck, el.add(1, stereoDrift), tonal.bed);
