@@ -69,6 +69,11 @@ describe("buildSongComposition", () => {
     expect(composition.sceneAirSeq).toHaveLength(8);
     expect(composition.sceneShimmerSeq).toHaveLength(8);
     expect(composition.sceneWidthSeq).toHaveLength(8);
+    expect(composition.formStateSeq).toHaveLength(8);
+    expect(composition.formBedSeq).toHaveLength(8);
+    expect(composition.formPulseSeq).toHaveLength(8);
+    expect(composition.formHookSeq).toHaveLength(8);
+    expect(composition.formDrumSeq).toHaveLength(8);
 
     [0, 8].forEach((index) => expect(composition.kickSeq[index]).toBe(1));
     [4, 12].forEach((index) => expect(composition.snareSeq[index]).toBe(1));
@@ -87,6 +92,10 @@ describe("buildSongComposition", () => {
     composition.sceneBedSeq.forEach((value) => expect(value).toBeGreaterThan(0));
     composition.sceneDrumSeq.forEach((value) => expect(value).toBeGreaterThan(0));
     composition.sceneWidthSeq.forEach((value) => expect(value).toBeGreaterThan(0.5));
+    composition.formStateSeq.forEach((value) => expect(value).toBeGreaterThanOrEqual(0));
+    composition.formStateSeq.forEach((value) => expect(value).toBeLessThanOrEqual(4));
+    composition.formDrumSeq.forEach((value) => expect(value).toBeGreaterThan(0.2));
+    composition.formHookSeq.forEach((value) => expect(value).toBeGreaterThan(0.3));
   });
 
   it("keeps generated ratios inside the selected scale family", () => {

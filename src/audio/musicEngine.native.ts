@@ -374,7 +374,7 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const chordRate = (cfg.pulseBpm / 60) * song.tempoScale / 8;
     const padRate = (cfg.pulseBpm / 60) * song.tempoScale / 4;
 
-    const masterHighpassHz = 95 + song.subTrim * 110;
+    const masterHighpassHz = mixProfile.lowCutBaseHz + song.subTrim * 42 + Math.max(0, -mixProfile.subShelfDb - 6) * 1.2;
     const dt = 1 / SAMPLE_RATE;
     const rc = 1 / (TWO_PI * masterHighpassHz);
     const hpAlpha = rc / (rc + dt);
@@ -399,6 +399,11 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
     const compRelease = Math.exp(-1 / (SAMPLE_RATE * 0.18));
     let compEnv = 0;
     let compGain = 1;
+    const rmsAttack = Math.exp(-1 / (SAMPLE_RATE * 0.12));
+    const rmsRelease = Math.exp(-1 / (SAMPLE_RATE * 0.42));
+    let rmsEnv = mixProfile.rmsTarget;
+    let agcGain = 1;
+    const agcAdapt = Math.max(0.006, mixProfile.rmsAdapt);
     const frameContext: NativeFrameContext = {
       t: 0,
       sampleIndex: 0,
@@ -434,6 +439,10 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       const sceneAir = sceneValueAt(composition.sceneAirSeq, sceneStep, scenePhase);
       const sceneShimmer = sceneValueAt(composition.sceneShimmerSeq, sceneStep, scenePhase);
       const sceneWidth = sceneValueAt(composition.sceneWidthSeq, sceneStep, scenePhase);
+      const formBed = sceneValueAt(composition.formBedSeq, sceneStep, scenePhase);
+      const formPulse = sceneValueAt(composition.formPulseSeq, sceneStep, scenePhase);
+      const formHook = sceneValueAt(composition.formHookSeq, sceneStep, scenePhase);
+      const formDrum = sceneValueAt(composition.formDrumSeq, sceneStep, scenePhase);
 
       const padStep = Math.floor(t * padRate) % 16;
       const drone = renderPadFrame(frameContext, composition, padStep);
@@ -447,16 +456,26 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
 
       const duck = 1 - drumsFrame.kickEnv * (0.13 + song.drumDensity * 0.1);
       const bedLeft =
-        (drone.left * sceneBed + groove.bass * sceneBass + groove.pulse * scenePulse + riffFrame.riff * sceneRiff + air + shimmer) *
+        (drone.left * sceneBed * formBed +
+          groove.bass * sceneBass * formBed +
+          groove.pulse * scenePulse * formPulse +
+          riffFrame.riff * sceneRiff * formHook +
+          air +
+          shimmer) *
         duck *
         instrumentation.bedLevel;
       const bedRight =
-        (drone.right * sceneBed + groove.bass * sceneBass + groove.pulse * scenePulse + riffFrame.riff * sceneRiff + air + shimmer) *
+        (drone.right * sceneBed * formBed +
+          groove.bass * sceneBass * formBed +
+          groove.pulse * scenePulse * formPulse +
+          riffFrame.riff * sceneRiff * formHook +
+          air +
+          shimmer) *
         duck *
         instrumentation.bedLevel;
       const drumBus = drumsFrame.drumBus;
-      const drumLeft = drumBus * sceneDrum * (0.55 + song.drumDensity * 0.35) * 0.95 * instrumentation.drumLevel;
-      const drumRight = drumBus * sceneDrum * (0.55 + song.drumDensity * 0.35) * 1.05 * instrumentation.drumLevel;
+      const drumLeft = drumBus * sceneDrum * formDrum * (0.55 + song.drumDensity * 0.35) * 0.95 * instrumentation.drumLevel;
+      const drumRight = drumBus * sceneDrum * formDrum * (0.55 + song.drumDensity * 0.35) * 1.05 * instrumentation.drumLevel;
 
       const spaceTapL1 = spaceBufferL1[spaceIdx1];
       const spaceTapR1 = spaceBufferR1[spaceIdx1];
@@ -521,8 +540,26 @@ export class GenerativeMusicEngine implements IGenerativeMusicEngine {
       prevOutputL = hpL;
       prevOutputR = hpR;
 
-      left[i] = hpL;
-      right[i] = hpR;
+      const power = (hpL * hpL + hpR * hpR) * 0.5;
+      if (power > rmsEnv) {
+        rmsEnv = rmsAttack * rmsEnv + (1 - rmsAttack) * power;
+      } else {
+        rmsEnv = rmsRelease * rmsEnv + (1 - rmsRelease) * power;
+      }
+
+      const targetAgc = Math.sqrt(mixProfile.rmsTarget / Math.max(1e-6, rmsEnv));
+      const minAgc = 0.78 + (mixProfile.dynamicRange - 0.6) * 0.2;
+      const maxAgc = 1.18 + (1 - mixProfile.dynamicRange) * 0.2;
+      const clampedAgc = Math.max(minAgc, Math.min(maxAgc, targetAgc));
+      agcGain += (clampedAgc - agcGain) * agcAdapt;
+
+      const masteredL = hpL * mixProfile.masterTrim * agcGain;
+      const masteredR = hpR * mixProfile.masterTrim * agcGain;
+      const limitedL = mixProfile.limiterCeiling * Math.tanh(masteredL / mixProfile.limiterCeiling);
+      const limitedR = mixProfile.limiterCeiling * Math.tanh(masteredR / mixProfile.limiterCeiling);
+
+      left[i] = limitedL;
+      right[i] = limitedR;
     }
 
     const wav = encodeStereoWavBase64(left, right, SAMPLE_RATE);

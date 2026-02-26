@@ -32,6 +32,11 @@ export type SongComposition = {
   sceneAirSeq: number[];
   sceneShimmerSeq: number[];
   sceneWidthSeq: number[];
+  formStateSeq: number[];
+  formBedSeq: number[];
+  formPulseSeq: number[];
+  formHookSeq: number[];
+  formDrumSeq: number[];
 };
 
 const mod = (n: number, m: number) => ((n % m) + m) % m;
@@ -124,6 +129,16 @@ type ArrangementScene = {
   width: number;
 };
 
+type FormState = "intro" | "build" | "drop" | "break" | "outro";
+type FormMix = {
+  bed: number;
+  pulse: number;
+  hook: number;
+  drums: number;
+  gate: number;
+  accent: number;
+};
+
 const ARRANGEMENT_LIBRARY: Record<SongInstrumentation, ArrangementScene[]> = {
   band: [
     { bed: 1.05, bass: 0.95, pulse: 0.72, riff: 0.7, drums: 0.65, air: 0.9, shimmer: 0.8, width: 0.94 },
@@ -181,7 +196,42 @@ const ARRANGEMENT_BLUEPRINT_BY_MODE: Record<FocusMode, number[]> = {
   sleep: [0, 2, 0, 1, 2, 3, 0, 2]
 };
 
+const FORM_SEQUENCE_BY_MODE: Record<FocusMode, FormState[]> = {
+  focus: ["intro", "build", "drop", "break", "build", "drop", "outro", "drop"],
+  relax: ["intro", "build", "break", "build", "drop", "break", "outro", "build"],
+  sleep: ["intro", "build", "break", "build", "break", "build", "outro", "break"]
+};
+
+const FORM_MIX: Record<FormState, FormMix> = {
+  intro: { bed: 1.08, pulse: 0.72, hook: 0.62, drums: 0.54, gate: 0.46, accent: 0.9 },
+  build: { bed: 1, pulse: 0.92, hook: 0.94, drums: 0.9, gate: 0.68, accent: 0.98 },
+  drop: { bed: 0.94, pulse: 1.08, hook: 1.14, drums: 1.16, gate: 0.84, accent: 1.08 },
+  break: { bed: 1.1, pulse: 0.58, hook: 0.44, drums: 0.34, gate: 0.3, accent: 0.82 },
+  outro: { bed: 1.02, pulse: 0.64, hook: 0.58, drums: 0.5, gate: 0.4, accent: 0.86 }
+};
+
 const clampRange = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const buildFormLanes = (mode: FocusMode, rng: Mulberry32) => {
+  const base = [...FORM_SEQUENCE_BY_MODE[mode]];
+  if (mode !== "sleep" && rng.chance(0.38)) {
+    base[5] = "break";
+  }
+  if (mode === "focus" && rng.chance(0.36)) {
+    base[3] = "build";
+  }
+  if (mode === "relax" && rng.chance(0.42)) {
+    base[2] = "intro";
+  }
+
+  const formStateSeq = base.map((state) => ["intro", "build", "drop", "break", "outro"].indexOf(state));
+  const formBedSeq = base.map((state) => FORM_MIX[state].bed);
+  const formPulseSeq = base.map((state) => FORM_MIX[state].pulse);
+  const formHookSeq = base.map((state) => FORM_MIX[state].hook);
+  const formDrumSeq = base.map((state) => FORM_MIX[state].drums);
+
+  return { formStateSeq, formBedSeq, formPulseSeq, formHookSeq, formDrumSeq, formNames: base };
+};
 
 const buildSceneLanes = (mode: FocusMode, instrumentation: SongInstrumentation, rng: Mulberry32) => {
   const pool = ARRANGEMENT_LIBRARY[instrumentation];
@@ -254,6 +304,47 @@ const evolveDegree = (base: number, scaleLength: number, rng: Mulberry32, loosen
   return mod(base + jump, scaleLength);
 };
 
+const buildMotifTheme = (hookTemplate: Array<number | null>, scaleLength: number, rng: Mulberry32) => {
+  const source = hookTemplate.filter((step): step is number => step != null);
+  const fallback = [0, 2, 4, 2, 1, 3, 5, 3];
+  const theme = Array.from({ length: 8 }, (_, index) => source[index % Math.max(1, source.length)] ?? fallback[index] ?? 0);
+
+  return theme.map((degree, index) => {
+    if (index === 0) {
+      return degree;
+    }
+
+    const move = rng.chance(0.24) ? (rng.chance(0.5) ? 1 : -1) : 0;
+    return clampRange(degree + move, -2, scaleLength + 7);
+  });
+};
+
+const getBarMotif = (theme: number[], formState: FormState, bar: number, rng: Mulberry32) => {
+  const segment = (bar % 2) * 4;
+  const base = theme.slice(segment, segment + 4);
+  const pivot = base[0] ?? 0;
+
+  if (formState === "break") {
+    return [pivot, pivot, pivot + 1, pivot];
+  }
+
+  if (formState === "intro" || formState === "outro") {
+    return [base[0] ?? 0, base[1] ?? 1, base[0] ?? 0, base[2] ?? 2];
+  }
+
+  if (formState === "drop") {
+    const retro = [...base].reverse();
+    const variant = rng.chance(0.5) ? retro : base;
+    return variant.map((degree, idx) => degree + (idx === 0 ? 0 : idx === 2 ? 1 : 0));
+  }
+
+  if (rng.chance(0.34)) {
+    return base.map((degree, idx) => (idx % 2 === 0 ? degree : degree + 1));
+  }
+
+  return base;
+};
+
 export const describeSongKey = (song: SongPreset) => {
   const names = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
   const note = names[mod(song.rootMidi, 12)] ?? "C";
@@ -266,6 +357,8 @@ export const buildSongComposition = (mode: FocusMode, song: SongPreset, evolveTi
 
   const scale = SCALE_INTERVALS[song.scaleFamily];
   const progression = PROGRESSION_LIBRARY[song.progression];
+  const formLanes = buildFormLanes(mode, rng);
+  const formNames = formLanes.formNames;
 
   const chordDegrees = Array.from({ length: 8 }, (_, bar) => {
     const base = progression[bar % progression.length] ?? 0;
@@ -303,12 +396,18 @@ export const buildSongComposition = (mode: FocusMode, song: SongPreset, evolveTi
 
   const pulseTemplate = GROOVE_PULSE[song.groove];
   const pulseGateSeq = Array.from({ length: 32 }, (_, step) => {
+    const bar = Math.floor(step / 4) % formNames.length;
+    const form = FORM_MIX[formNames[bar] ?? "build"];
     const base = pulseTemplate[step % pulseTemplate.length] ?? 0;
     if (step % 8 === 0) {
       return 1;
     }
 
-    const ghostChance = song.groove === "broken" ? 0.12 : 0.08;
+    if (form.pulse < 0.62 && step % 4 !== 0) {
+      return 0;
+    }
+
+    const ghostChance = (song.groove === "broken" ? 0.12 : 0.08) * form.pulse;
     if (!base && rng.chance(ghostChance + song.drumDensity * 0.08)) {
       return 1;
     }
@@ -334,33 +433,35 @@ export const buildSongComposition = (mode: FocusMode, song: SongPreset, evolveTi
   });
 
   const hookTemplate = HOOK_LIBRARY[song.hookStyle];
+  const motifTheme = buildMotifTheme(hookTemplate, scale.length, rng);
+  const barMotifs = Array.from({ length: 8 }, (_, bar) => {
+    const formState = formNames[bar] ?? "build";
+    return getBarMotif(motifTheme, formState, bar, rng);
+  });
   const riffRatioSeq: number[] = [];
   const riffGateSeq: number[] = [];
   const riffAccentSeq: number[] = [];
 
   let previousRatio = scaleDegreeToRatio(scale, 0);
   for (let step = 0; step < 32; step += 1) {
-    const chord = chordDegrees[Math.floor(step / 4) % chordDegrees.length] ?? 0;
-    const motifDegree = hookTemplate[step % hookTemplate.length];
-
-    if (motifDegree == null) {
-      riffGateSeq.push(0);
-      riffRatioSeq.push(previousRatio);
-      riffAccentSeq.push(0.4);
-      continue;
-    }
+    const bar = Math.floor(step / 4) % 8;
+    const formState = formNames[bar] ?? "build";
+    const formMix = FORM_MIX[formState];
+    const chord = chordDegrees[bar % chordDegrees.length] ?? 0;
+    const motifDegree = barMotifs[bar]?.[step % 4] ?? motifTheme[step % motifTheme.length] ?? 0;
 
     const octaveLift = song.hookStyle === "arpeggio" ? scale.length : song.hookStyle === "glide" ? scale.length - 1 : 0;
     const melodicDegree = chord + motifDegree + octaveLift;
     const ratio = scaleDegreeToRatio(scale, melodicDegree);
 
-    const gateProbability = 0.62 + song.hookDensity * 0.34;
-    const forceAnchor = step % 8 === 0 || step % 16 === 12;
+    const cadenceBias = step % 4 === 3 ? 0.08 : 0;
+    const gateProbability = clampRange(formMix.gate + song.hookDensity * 0.3 + cadenceBias, 0.08, 0.98);
+    const forceAnchor = step % 8 === 0 || step % 16 === 12 || (formState !== "break" && step % 4 === 0);
     const gate = forceAnchor || rng.chance(gateProbability) ? 1 : 0;
 
     riffGateSeq.push(gate);
     riffRatioSeq.push(ratio);
-    riffAccentSeq.push(forceAnchor ? 1 : 0.65 + rng.range(-0.1, 0.16));
+    riffAccentSeq.push(forceAnchor ? 1 * formMix.accent : (0.62 + rng.range(-0.08, 0.14)) * formMix.accent);
     previousRatio = ratio;
   }
 
@@ -426,7 +527,12 @@ export const buildSongComposition = (mode: FocusMode, song: SongPreset, evolveTi
     sceneDrumSeq: sceneLanes.sceneDrumSeq,
     sceneAirSeq: sceneLanes.sceneAirSeq,
     sceneShimmerSeq: sceneLanes.sceneShimmerSeq,
-    sceneWidthSeq: sceneLanes.sceneWidthSeq
+    sceneWidthSeq: sceneLanes.sceneWidthSeq,
+    formStateSeq: formLanes.formStateSeq,
+    formBedSeq: formLanes.formBedSeq,
+    formPulseSeq: formLanes.formPulseSeq,
+    formHookSeq: formLanes.formHookSeq,
+    formDrumSeq: formLanes.formDrumSeq
   };
 };
 

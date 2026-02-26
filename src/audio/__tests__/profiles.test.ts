@@ -66,6 +66,20 @@ describe("audio profiles", () => {
     expect(a.compThreshold).toBeLessThan(0.5);
     expect(a.compRatio).toBeGreaterThan(1.9);
     expect(a.compRatio).toBeLessThan(4.3);
+    expect(a.masterTrim).toBeGreaterThan(0.75);
+    expect(a.masterTrim).toBeLessThan(0.97);
+    expect(a.limiterCeiling).toBeGreaterThan(0.8);
+    expect(a.limiterCeiling).toBeLessThan(0.96);
+    expect(a.rmsTarget).toBeGreaterThan(0.03);
+    expect(a.rmsTarget).toBeLessThan(0.09);
+    expect(a.rmsAdapt).toBeGreaterThan(0.03);
+    expect(a.rmsAdapt).toBeLessThan(0.1);
+    expect(a.lowCutBaseHz).toBeGreaterThan(45);
+    expect(a.lowCutBaseHz).toBeLessThan(75);
+    expect(a.subShelfDb).toBeLessThan(-5);
+    expect(a.subShelfDb).toBeGreaterThan(-14);
+    expect(a.dynamicRange).toBeGreaterThan(0.58);
+    expect(a.dynamicRange).toBeLessThan(0.9);
   });
 
   it("creates deterministic instrumentation profiles", () => {

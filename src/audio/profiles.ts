@@ -60,6 +60,13 @@ export type MixProfile = {
   masterDrive: number;
   compThreshold: number;
   compRatio: number;
+  masterTrim: number;
+  limiterCeiling: number;
+  rmsTarget: number;
+  rmsAdapt: number;
+  lowCutBaseHz: number;
+  subShelfDb: number;
+  dynamicRange: number;
 };
 
 export type InstrumentationProfile = {
@@ -239,6 +246,46 @@ const NATIVE_DRUM_KITS: Record<SongDrumKit, NativeDrumKitProfile> = {
   }
 };
 
+type ModeMasteringTarget = {
+  trim: number;
+  ceiling: number;
+  rms: number;
+  rmsAdapt: number;
+  lowCutHz: number;
+  subShelfDb: number;
+  dynamicRange: number;
+};
+
+const MODE_MASTERING: Record<SongPreset["mode"], ModeMasteringTarget> = {
+  focus: {
+    trim: 0.92,
+    ceiling: 0.94,
+    rms: 0.07,
+    rmsAdapt: 0.07,
+    lowCutHz: 52,
+    subShelfDb: -7.5,
+    dynamicRange: 0.82
+  },
+  relax: {
+    trim: 0.88,
+    ceiling: 0.9,
+    rms: 0.056,
+    rmsAdapt: 0.055,
+    lowCutHz: 58,
+    subShelfDb: -9.5,
+    dynamicRange: 0.74
+  },
+  sleep: {
+    trim: 0.82,
+    ceiling: 0.86,
+    rms: 0.044,
+    rmsAdapt: 0.045,
+    lowCutHz: 64,
+    subShelfDb: -11.5,
+    dynamicRange: 0.66
+  }
+};
+
 const INSTRUMENTATION_PROFILES: Record<SongInstrumentation, InstrumentationProfile> = {
   band: {
     padVoices: 3,
@@ -340,6 +387,7 @@ export const getNativeDrumKitProfile = (drumKit: SongDrumKit) => NATIVE_DRUM_KIT
 export const getMixProfile = (song: SongPreset): MixProfile => {
   const rng = new Mulberry32(song.seed ^ 0x45d9f3b);
   const lowHook = 1 - song.hookDensity;
+  const master = MODE_MASTERING[song.mode];
 
   return {
     reverbBedSend: 0.12 + rng.range(0, 0.16) + lowHook * 0.08,
@@ -349,9 +397,16 @@ export const getMixProfile = (song: SongPreset): MixProfile => {
     echoFeedback: 0.18 + rng.range(0, 0.32),
     stereoWidth: 0.72 + rng.range(0, 0.3),
     glueAmount: 0.12 + rng.range(0, 0.2) + song.drumDensity * 0.08,
-    masterDrive: 0.92 + rng.range(0, 0.26),
-    compThreshold: 0.34 + rng.range(0, 0.14),
-    compRatio: 2 + rng.range(0, 2.2)
+    masterDrive: 0.9 + rng.range(0, 0.22) + (1 - master.dynamicRange) * 0.12,
+    compThreshold: 0.34 + rng.range(0, 0.14) - (1 - master.dynamicRange) * 0.05,
+    compRatio: 2 + rng.range(0, 2.2) + (1 - master.dynamicRange) * 0.35,
+    masterTrim: master.trim + rng.range(-0.03, 0.03),
+    limiterCeiling: master.ceiling + rng.range(-0.02, 0.01),
+    rmsTarget: master.rms + rng.range(-0.008, 0.008),
+    rmsAdapt: master.rmsAdapt + rng.range(-0.01, 0.01),
+    lowCutBaseHz: master.lowCutHz + rng.range(-4, 6),
+    subShelfDb: master.subShelfDb + rng.range(-1.2, 1),
+    dynamicRange: master.dynamicRange + rng.range(-0.05, 0.05)
   };
 };
 
